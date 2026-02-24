@@ -1,0 +1,281 @@
+import { GameOfLife, DenseConfiguration, SparseConfiguration, ToroidalDomain, LatticeDomain, CylindricalDomain, MobiusDomain, KleinBottleDomain, HexagonalGameOfLife, TriangularGameOfLife } from './cellular_automaton.js';
+const CANVAS_SIZE = 800; // Physical pixels
+let GRID_WIDTH = 100;
+let GRID_HEIGHT = 100;
+let CELL_WIDTH = Math.floor(CANVAS_SIZE / GRID_WIDTH);
+let CELL_HEIGHT = Math.floor(CANVAS_SIZE / GRID_HEIGHT);
+const FPS = 15;
+/**
+ * A Strict Lattice Domain that enforces a hard border constraint.
+ * If a coordinate extends past [0, GRID_WIDTH-1], it resolves to mathematical `null` (Vacuum).
+ */
+export class StrictDomain extends LatticeDomain {
+    constructor(dimensions) {
+        super();
+        this.dimensions = dimensions;
+    }
+    resolveBoundary(coord) {
+        for (let i = 0; i < coord.length; i++) {
+            if (coord[i] < 0 || coord[i] >= this.dimensions[i]) {
+                return null; // Out of bounds evaluates to vacuum
+            }
+        }
+        return coord;
+    }
+}
+// Generate the specific finite block subset of `L` to formally simulate.
+function createSimulationBounds(width, height) {
+    const coords = [];
+    for (let x = 0; x < width; x++) {
+        for (let y = 0; y < height; y++) {
+            coords.push([x, y]);
+        }
+    }
+    return coords;
+}
+let simulationBounds = [];
+let dimensions;
+let ca = new GameOfLife();
+let currentConfig;
+let nextConfig;
+let domain;
+let intervalId = null;
+let ctx = null;
+function seedEcosystem() {
+    for (let x = 0; x < GRID_WIDTH; x++) {
+        for (let y = 0; y < GRID_HEIGHT; y++) {
+            // Give a 20% chance of a cell being alive in the inner 50% core
+            const isCenter = x > GRID_WIDTH * 0.25 && x < GRID_WIDTH * 0.75 && y > GRID_HEIGHT * 0.25 && y < GRID_HEIGHT * 0.75;
+            const state = (isCenter && Math.random() < 0.2) ? 1 : 0;
+            currentConfig.setState([x, y], state);
+        }
+    }
+}
+export function initializeSimulation() {
+    const configType = document.getElementById('configType').value;
+    const domainType = document.getElementById('domainType').value;
+    const topologyType = document.getElementById('topologyType').value;
+    const frequencyDomainRaw = document.getElementById('frequencyDomain')?.value || '0';
+    const frequencyDomain = parseInt(frequencyDomainRaw) || 0;
+    const rawSurvival = document.getElementById('survivalRules').value;
+    const rawBirth = document.getElementById('birthRules').value;
+    const parseRules = (str) => str.split('').filter(c => /[0-9]/.test(c)).map(Number);
+    const survivalRules = parseRules(rawSurvival);
+    const birthRules = parseRules(rawBirth);
+    GRID_WIDTH = parseInt(document.getElementById('gridWidth').value) || 100;
+    GRID_HEIGHT = parseInt(document.getElementById('gridHeight').value) || 100;
+    // Recalculate physical rendering sizes based on chosen topology
+    if (topologyType === 'triangular') {
+        CELL_WIDTH = (CANVAS_SIZE * 2) / (GRID_WIDTH + 1);
+        CELL_HEIGHT = CANVAS_SIZE / GRID_HEIGHT;
+    }
+    else if (topologyType === 'hexagonal') {
+        CELL_WIDTH = CANVAS_SIZE / (GRID_WIDTH + 0.5);
+        CELL_HEIGHT = CANVAS_SIZE / GRID_HEIGHT;
+    }
+    else {
+        CELL_WIDTH = CANVAS_SIZE / GRID_WIDTH;
+        CELL_HEIGHT = CANVAS_SIZE / GRID_HEIGHT;
+    }
+    console.log(`Re-initializing Simulation: [Topology=${topologyType}] [Storage=${configType}] [Domain=${domainType}] [FD=${frequencyDomain}] [B${birthRules.join('')}/S${survivalRules.join('')}] [Size=${GRID_WIDTH}x${GRID_HEIGHT}]`);
+    simulationBounds = createSimulationBounds(GRID_WIDTH, GRID_HEIGHT);
+    dimensions = [GRID_WIDTH, GRID_HEIGHT];
+    // 0. Resolve Mathematical Totalistic Ruleset based on Topology
+    if (topologyType === 'triangular') {
+        ca = new TriangularGameOfLife(survivalRules, birthRules, frequencyDomain);
+    }
+    else if (topologyType === 'hexagonal') {
+        ca = new HexagonalGameOfLife(survivalRules, birthRules, frequencyDomain);
+    }
+    else {
+        ca = new GameOfLife(survivalRules, birthRules, frequencyDomain);
+    }
+    // 1. Resolve State Storage Model
+    if (configType === 'sparse') {
+        currentConfig = new SparseConfiguration(ca.quiescentState);
+        nextConfig = new SparseConfiguration(ca.quiescentState);
+    }
+    else {
+        currentConfig = new DenseConfiguration(dimensions, ca.quiescentState);
+        nextConfig = new DenseConfiguration(dimensions, ca.quiescentState);
+    }
+    // 2. Resolve Topological Physics Boundary
+    if (domainType === 'strict') {
+        domain = new StrictDomain(dimensions);
+    }
+    else if (domainType === 'cylindrical') {
+        domain = new CylindricalDomain(dimensions);
+    }
+    else if (domainType === 'mobius') {
+        domain = new MobiusDomain(dimensions);
+    }
+    else if (domainType === 'klein') {
+        domain = new KleinBottleDomain(dimensions);
+    }
+    else {
+        domain = new ToroidalDomain(dimensions);
+    }
+    seedEcosystem();
+}
+export function draw() {
+    if (!ctx)
+        return;
+    ctx.fillStyle = '#000'; // Black stable aesthetics
+    ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+    ctx.fillStyle = '#0f0'; // Vibrant green life (default)
+    const topologyType = document.getElementById('topologyType').value;
+    const frequencyDomainRaw = document.getElementById('frequencyDomain')?.value || '0';
+    const frequencyDomain = parseInt(frequencyDomainRaw) || 0;
+    const drawCell = (x, y, state) => {
+        if (!ctx)
+            return;
+        if (frequencyDomain > 0) {
+            if (state === 0)
+                return; // dN: strictly dead background (Black)
+            const n = frequencyDomain;
+            if (state > 0 && state <= n) {
+                // Alive states: a_0 to a_n
+                // Vibrant Green (0, 255, 0) to White (255, 255, 255)
+                const ratio = n === 1 ? 0 : (state - 1) / (n - 1);
+                const v = Math.floor(ratio * 255);
+                ctx.fillStyle = `rgb(${v}, 255, ${v})`;
+            }
+            else if (state > n && state < 2 * n) {
+                // Dead states (trailing): d_0 to d_{n-1}
+                // Fresh Blood Red (255, 0, 0) to Black (0, 0, 0)
+                const ratio = (state - (n + 1)) / n;
+                const r = Math.floor(255 * (1 - ratio));
+                ctx.fillStyle = `rgb(${r}, 0, 0)`;
+            }
+        }
+        if (topologyType === 'hexagonal') {
+            const isOddRow = Math.abs(y) % 2 === 1;
+            const xOffset = isOddRow ? CELL_WIDTH * 0.5 : 0;
+            const px = x * CELL_WIDTH + xOffset;
+            const py = y * CELL_HEIGHT;
+            // Draw a hexagon
+            ctx.beginPath();
+            for (let i = 0; i < 6; i++) {
+                const angle = Math.PI / 3 * i + Math.PI / 6;
+                const hx = px + CELL_WIDTH / 2 + (CELL_WIDTH / 2) * Math.cos(angle) * 1.05; // 1.05 to lightly overlap edges
+                const hy = py + CELL_HEIGHT / 2 + (CELL_HEIGHT / 2) * Math.sin(angle) * 1.05;
+                if (i === 0)
+                    ctx.moveTo(hx, hy);
+                else
+                    ctx.lineTo(hx, hy);
+            }
+            ctx.closePath();
+            ctx.fill();
+        }
+        else if (topologyType === 'triangular') {
+            const isUpTriangle = Math.abs(x + y) % 2 === 0;
+            const px = x * (CELL_WIDTH / 2);
+            const py = y * CELL_HEIGHT;
+            ctx.beginPath();
+            if (isUpTriangle) {
+                ctx.moveTo(px + CELL_WIDTH / 2, py);
+                ctx.lineTo(px, py + CELL_HEIGHT);
+                ctx.lineTo(px + CELL_WIDTH, py + CELL_HEIGHT);
+            }
+            else {
+                ctx.moveTo(px, py);
+                ctx.lineTo(px + CELL_WIDTH, py);
+                ctx.lineTo(px + CELL_WIDTH / 2, py + CELL_HEIGHT);
+            }
+            ctx.closePath();
+            ctx.fill();
+        }
+        else {
+            ctx.fillRect(x * CELL_WIDTH, y * CELL_HEIGHT, Math.ceil(CELL_WIDTH), Math.ceil(CELL_HEIGHT));
+        }
+    };
+    if (currentConfig instanceof SparseConfiguration) {
+        // High-performance explicit-only render loop utilizing mathematical mapping
+        for (const coord of currentConfig.getActiveCoordinates()) {
+            // Visual check to not draw sparse elements permanently offscreen 
+            // (e.g. if boundary is Strict and a glider shoots off into infinite vacuum)
+            if (coord[0] >= 0 && coord[0] < GRID_WIDTH && coord[1] >= 0 && coord[1] < GRID_HEIGHT) {
+                // FD map guarantees sparse returns {1,2,3} not 0
+                drawCell(coord[0], coord[1], currentConfig.getState(coord));
+            }
+        }
+    }
+    else {
+        // Standard full-sweep block dense bounding render
+        for (const coord of simulationBounds) {
+            const state = currentConfig.getState(coord);
+            if (state !== 0) {
+                drawCell(coord[0], coord[1], state);
+            }
+        }
+    }
+}
+export function update() {
+    // Math: G: C -> C' 
+    // Uses the selected topological domain constraint map and the selected storage array math.
+    ca.evolve(currentConfig, simulationBounds, nextConfig, domain);
+    // Swap buffers (C' becomes C)
+    const temp = currentConfig;
+    currentConfig = nextConfig;
+    nextConfig = temp;
+    // Clear C' back to quiescence for the next evaluation pass
+    if (nextConfig instanceof SparseConfiguration) {
+        // Erasing the hash map entirely is O(1)
+        nextConfig = new SparseConfiguration(ca.quiescentState);
+    }
+    else {
+        for (const coord of simulationBounds) {
+            nextConfig.setState(coord, ca.quiescentState);
+        }
+    }
+}
+// Browser attachment payload
+if (typeof window !== 'undefined') {
+    window.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = CANVAS_SIZE;
+        canvas.height = CANVAS_SIZE;
+        canvas.style.border = '2px solid #333';
+        canvas.style.boxShadow = '0 0 20px #0f05';
+        canvas.style.borderRadius = '4px';
+        document.getElementById('canvas-container')?.appendChild(canvas);
+        ctx = canvas.getContext('2d');
+        // Connect UI Buttons
+        document.getElementById('resetBtn')?.addEventListener('click', () => {
+            initializeSimulation();
+        });
+        document.getElementById('randomRuleBtn')?.addEventListener('click', () => {
+            const topologyType = document.getElementById('topologyType').value;
+            let maxNeighbors = 8;
+            if (topologyType === 'hexagonal')
+                maxNeighbors = 6;
+            if (topologyType === 'triangular')
+                maxNeighbors = 3;
+            const generateRandomRule = () => {
+                const rule = [];
+                for (let i = 0; i <= maxNeighbors; i++) {
+                    if (Math.random() > 0.5)
+                        rule.push(i);
+                }
+                return rule.join('');
+            };
+            document.getElementById('survivalRules').value = generateRandomRule();
+            document.getElementById('birthRules').value = generateRandomRule();
+            initializeSimulation();
+        });
+        document.getElementById('frequencyDomain')?.addEventListener('change', initializeSimulation);
+        document.getElementById('topologyType')?.addEventListener('change', initializeSimulation);
+        document.getElementById('configType')?.addEventListener('change', initializeSimulation);
+        document.getElementById('domainType')?.addEventListener('change', initializeSimulation);
+        document.getElementById('survivalRules')?.addEventListener('change', initializeSimulation);
+        document.getElementById('birthRules')?.addEventListener('change', initializeSimulation);
+        document.getElementById('gridWidth')?.addEventListener('change', initializeSimulation);
+        document.getElementById('gridHeight')?.addEventListener('change', initializeSimulation);
+        // Start 
+        initializeSimulation();
+        intervalId = window.setInterval(() => {
+            draw();
+            update();
+        }, 1000 / FPS);
+    };
+}

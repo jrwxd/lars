@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Formal CA Visualization</title>
+    <style>
+        body {
+            background-color: #050505;
+            color: #ddd;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+        }
+
+        #controls {
+            display: flex;
+            gap: 20px;
+            background: #111;
+            padding: 15px 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+            margin-bottom: 20px;
+            border: 1px solid #333;
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        label {
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #888;
+        }
+
+        select,
+        button {
+            background: #222;
+            color: #fff;
+            border: 1px solid #444;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        select:hover,
+        button:hover {
+            border-color: #0f0;
+            background: #2a2a2a;
+        }
+
+        button {
+            background: #0a3a0a;
+            border-color: #0f0;
+            color: #0f0;
+            font-weight: bold;
+        }
+
+        button:hover {
+            background: #0f0;
+            color: #000;
+        }
+
+        #canvas-container {
+            position: relative;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="controls">
+        <div class="control-group">
+            <label for="configType">Configuration (Storage)</label>
+            <select id="configType">
+                <option value="dense">Dense (Array Buffer)</option>
+                <option value="sparse">Sparse (Hash Map)</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label for="frequencyDomain">Frequency States (N)</label>
+            <input type="number" id="frequencyDomain" value="0" min="0" max="100" style="width: 50px;"
+                title="0 = Disabled (Binary), N > 0 = 2N Temporal History States">
+        </div>
+
+        <div class="control-group">
+            <label for="topologyType">Neighborhood Topology</label>
+            <select id="topologyType">
+                <option value="square">Square (Moore 8-way)</option>
+                <option value="hexagonal">Hexagonal (6-way Odd-R)</option>
+                <option value="triangular">Triangular (3-way Edge)</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label for="domainType">Lattice Domain (Bounds)</label>
+            <select id="domainType">
+                <option value="toroidal">Toroidal (Periodic Wrap)</option>
+                <option value="strict">Strict (Vacuum Dead Borders)</option>
+                <option value="cylindrical">Cylindrical (Wrap X)</option>
+                <option value="mobius">Mobius Strip (Twist Wrap X)</option>
+                <option value="klein">Klein Bottle (Twisted Torus)</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label for="gridWidth">Width</label>
+            <input type="number" id="gridWidth" value="100" min="10" max="500" step="10" style="width: 70px;">
+        </div>
+
+        <div class="control-group">
+            <label for="gridHeight">Height</label>
+            <input type="number" id="gridHeight" value="100" min="10" max="500" step="10" style="width: 70px;">
+        </div>
+
+        <div class="control-group">
+            <label for="survivalRules">Survival (S)</label>
+            <input type="text" id="survivalRules" value="23" style="width: 60px;"
+                title="Target states required for a living cell to survive">
+        </div>
+
+        <div class="control-group">
+            <label for="birthRules">Birth (B)</label>
+            <input type="text" id="birthRules" value="3" style="width: 60px;"
+                title="Target states required for a dead cell to be born">
+        </div>
+
+        <button id="resetBtn">Restart Ecosystem</button>
+        <button id="randomRuleBtn">Random Rule</button>
+    </div>
+
+    <div id="canvas-container">
+        <!-- The canvas is injected dynamically via visualizer.js -->
+    </div>
+
+    <script type="module" src="dist/visualizer.js"></script>
+</body>
+
+</html>
