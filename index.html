@@ -96,11 +96,19 @@
         </div>
 
         <div class="control-group">
-            <label for="topologyType">Neighborhood Topology</label>
+            <label for="topologyType">Lattice Topology</label>
             <select id="topologyType">
-                <option value="square">Square (Moore 8-way)</option>
-                <option value="hexagonal">Hexagonal (6-way Odd-R)</option>
-                <option value="triangular">Triangular (3-way Edge)</option>
+                <option value="square" title="Max 4/8 neighbors">Square Grid</option>
+                <option value="hexagonal" title="Max 6/12 neighbors">Hexagonal Grid</option>
+                <option value="triangular" title="Max 3/12 neighbors">Triangular Grid</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label for="neighborhoodType">Neighborhood Rule</label>
+            <select id="neighborhoodType">
+                <option value="moore" title="Vertices included">Moore (Max Neighbors)</option>
+                <option value="vonNeumann" title="Edges only">Von Neumann (Edge Neighbors)</option>
             </select>
         </div>
 

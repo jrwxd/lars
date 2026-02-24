@@ -435,7 +435,12 @@ export class GameOfLife extends OuterTotalisticCellularAutomaton<2> {
      * @param survival Array of neighbor counts required to survive (default [2, 3])
      * @param birth Array of neighbor counts required to be born (default [3])
      */
-    constructor(survival: number[] = [2, 3], birth: number[] = [3], frequencyDomain: number = 0) {
+    constructor(
+        survival: number[] = [2, 3],
+        birth: number[] = [3],
+        frequencyDomain: number = 0,
+        public readonly neighborhoodType: 'moore' | 'vonNeumann' = 'moore'
+    ) {
 
         const states = new Set<number>([0, 1]);
         if (frequencyDomain > 0) {
@@ -460,6 +465,22 @@ export class GameOfLife extends OuterTotalisticCellularAutomaton<2> {
 
         this.survivalRules = new Set(survival);
         this.birthRules = new Set(birth);
+    }
+
+    getNeighborhoodOffsets(coord: Coordinate<2>): Neighborhood<2> {
+        if (this.neighborhoodType === 'vonNeumann') {
+            return [
+                [-1, 0], [1, 0], [0, -1], [0, 1],
+                [0, 0]
+            ] as unknown as Neighborhood<2>;
+        } else {
+            return [
+                [-1, -1], [0, -1], [1, -1],
+                [-1, 0], [1, 0],
+                [-1, 1], [0, 1], [1, 1],
+                [0, 0]
+            ] as unknown as Neighborhood<2>;
+        }
     }
 
     /**
@@ -491,7 +512,12 @@ export class HexagonalGameOfLife extends OuterTotalisticCellularAutomaton<2> {
      * @param survival Array of neighbor counts required to survive (default [3, 4])
      * @param birth Array of neighbor counts required to be born (default [2])
      */
-    constructor(survival: number[] = [3, 4], birth: number[] = [2], frequencyDomain: number = 0) {
+    constructor(
+        survival: number[] = [3, 4],
+        birth: number[] = [2],
+        frequencyDomain: number = 0,
+        public readonly neighborhoodType: 'moore' | 'vonNeumann' = 'vonNeumann'
+    ) {
 
         const states = new Set<number>([0, 1]);
         if (frequencyDomain > 0) {
@@ -516,20 +542,41 @@ export class HexagonalGameOfLife extends OuterTotalisticCellularAutomaton<2> {
         // Hexagonal mapped to "odd-r" Cartesian indices.
         const isOddRow = Math.abs(coord[1]) % 2 === 1;
 
-        if (isOddRow) {
-            return [
-                [-1, 0], [1, 0], // W, E
-                [0, -1], [1, -1], // NW, NE
-                [0, 1], [1, 1], // SW, SE
-                [0, 0] // Center
-            ] as unknown as Neighborhood<2>;
+        if (this.neighborhoodType === 'vonNeumann') {
+            if (isOddRow) {
+                return [
+                    [-1, 0], [1, 0], // W, E
+                    [0, -1], [1, -1], // NW, NE
+                    [0, 1], [1, 1], // SW, SE
+                    [0, 0] // Center
+                ] as unknown as Neighborhood<2>;
+            } else {
+                return [
+                    [-1, 0], [1, 0], // W, E
+                    [-1, -1], [0, -1], // NW, NE
+                    [-1, 1], [0, 1], // SW, SE
+                    [0, 0] // Center
+                ] as unknown as Neighborhood<2>;
+            }
         } else {
-            return [
-                [-1, 0], [1, 0], // W, E
-                [-1, -1], [0, -1], // NW, NE
-                [-1, 1], [0, 1], // SW, SE
-                [0, 0] // Center
-            ] as unknown as Neighborhood<2>;
+            // Moore (12 neighbors: 6 edge + 6 vertex)
+            if (isOddRow) {
+                return [
+                    [-1, 0], [1, 0], // W, E
+                    [0, -1], [1, -1], // NW, NE
+                    [0, 1], [1, 1], // SW, SE
+                    [0, -2], [2, -1], [2, 1], [0, 2], [-1, 1], [-1, -1], // Corners
+                    [0, 0] // Center
+                ] as unknown as Neighborhood<2>;
+            } else {
+                return [
+                    [-1, 0], [1, 0], // W, E
+                    [-1, -1], [0, -1], // NW, NE
+                    [-1, 1], [0, 1], // SW, SE
+                    [0, -2], [1, -1], [1, 1], [0, 2], [-2, 1], [-2, -1], // Corners
+                    [0, 0] // Center
+                ] as unknown as Neighborhood<2>;
+            }
         }
     }
 
@@ -555,7 +602,12 @@ export class TriangularGameOfLife extends OuterTotalisticCellularAutomaton<2> {
      * @param survival Array of neighbor counts required to survive (default [1, 2])
      * @param birth Array of neighbor counts required to be born (default [2])
      */
-    constructor(survival: number[] = [1, 2], birth: number[] = [2], frequencyDomain: number = 0) {
+    constructor(
+        survival: number[] = [1, 2],
+        birth: number[] = [2],
+        frequencyDomain: number = 0,
+        public readonly neighborhoodType: 'moore' | 'vonNeumann' = 'vonNeumann'
+    ) {
 
         const states = new Set<number>([0, 1]);
         if (frequencyDomain > 0) {
@@ -581,16 +633,37 @@ export class TriangularGameOfLife extends OuterTotalisticCellularAutomaton<2> {
         // (x + y) odd = DOWN Triangle. Shares top edge.
         const isUpTriangle = Math.abs(coord[0] + coord[1]) % 2 === 0;
 
-        if (isUpTriangle) {
-            return [
-                [-1, 0], [1, 0], [0, 1], // Left, Right, Bottom
-                [0, 0] // Center
-            ] as unknown as Neighborhood<2>;
+        if (this.neighborhoodType === 'vonNeumann') {
+            if (isUpTriangle) {
+                return [
+                    [-1, 0], [1, 0], [0, 1], // Left, Right, Bottom
+                    [0, 0] // Center
+                ] as unknown as Neighborhood<2>;
+            } else {
+                return [
+                    [-1, 0], [1, 0], [0, -1], // Left, Right, Top
+                    [0, 0] // Center
+                ] as unknown as Neighborhood<2>;
+            }
         } else {
-            return [
-                [-1, 0], [1, 0], [0, -1], // Left, Right, Top
-                [0, 0] // Center
-            ] as unknown as Neighborhood<2>;
+            // Moore (12 neighbors: 3 edge + 9 vertex)
+            if (isUpTriangle) {
+                return [
+                    [-1, 0], [1, 0], [0, 1], // Edge
+                    [-1, -1], [0, -1], [1, -1], // Top
+                    [2, 0], [1, 1], [2, 1], // Bottom-Right
+                    [-2, 0], [-1, 1], [-2, 1], // Bottom-Left
+                    [0, 0] // Center
+                ] as unknown as Neighborhood<2>;
+            } else {
+                return [
+                    [-1, 0], [1, 0], [0, -1], // Edge
+                    [-1, 1], [0, 1], [1, 1], // Bottom
+                    [1, -1], [2, -1], [2, 0], // Top-Right
+                    [-2, 0], [-1, -1], [-2, -1], // Top-Left
+                    [0, 0] // Center
+                ] as unknown as Neighborhood<2>;
+            }
         }
     }
 

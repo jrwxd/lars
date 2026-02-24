@@ -320,7 +320,7 @@ export class GameOfLife extends OuterTotalisticCellularAutomaton {
      * @param survival Array of neighbor counts required to survive (default [2, 3])
      * @param birth Array of neighbor counts required to be born (default [3])
      */
-    constructor(survival = [2, 3], birth = [3], frequencyDomain = 0) {
+    constructor(survival = [2, 3], birth = [3], frequencyDomain = 0, neighborhoodType = 'moore') {
         const states = new Set([0, 1]);
         if (frequencyDomain > 0) {
             for (let i = 2; i < 2 * frequencyDomain; i++) {
@@ -337,8 +337,25 @@ export class GameOfLife extends OuterTotalisticCellularAutomaton {
             [0, 0] // Convention: Center cell must be the final index.
         ], 0, // q = 0 (Dead state by default)
         frequencyDomain);
+        this.neighborhoodType = neighborhoodType;
         this.survivalRules = new Set(survival);
         this.birthRules = new Set(birth);
+    }
+    getNeighborhoodOffsets(coord) {
+        if (this.neighborhoodType === 'vonNeumann') {
+            return [
+                [-1, 0], [1, 0], [0, -1], [0, 1],
+                [0, 0]
+            ];
+        }
+        else {
+            return [
+                [-1, -1], [0, -1], [1, -1],
+                [-1, 0], [1, 0],
+                [-1, 1], [0, 1], [1, 1],
+                [0, 0]
+            ];
+        }
     }
     /**
      * The rigorous transition function f(s_center, outerSum).
@@ -366,7 +383,7 @@ export class HexagonalGameOfLife extends OuterTotalisticCellularAutomaton {
      * @param survival Array of neighbor counts required to survive (default [3, 4])
      * @param birth Array of neighbor counts required to be born (default [2])
      */
-    constructor(survival = [3, 4], birth = [2], frequencyDomain = 0) {
+    constructor(survival = [3, 4], birth = [2], frequencyDomain = 0, neighborhoodType = 'vonNeumann') {
         const states = new Set([0, 1]);
         if (frequencyDomain > 0) {
             for (let i = 2; i < 2 * frequencyDomain; i++) {
@@ -375,27 +392,51 @@ export class HexagonalGameOfLife extends OuterTotalisticCellularAutomaton {
         }
         super(2, states, [], // Dynamic evaluation overrides Neighborhood instantiation 
         0, frequencyDomain);
+        this.neighborhoodType = neighborhoodType;
         this.survivalRules = new Set(survival);
         this.birthRules = new Set(birth);
     }
     getNeighborhoodOffsets(coord) {
         // Hexagonal mapped to "odd-r" Cartesian indices.
         const isOddRow = Math.abs(coord[1]) % 2 === 1;
-        if (isOddRow) {
-            return [
-                [-1, 0], [1, 0], // W, E
-                [0, -1], [1, -1], // NW, NE
-                [0, 1], [1, 1], // SW, SE
-                [0, 0] // Center
-            ];
+        if (this.neighborhoodType === 'vonNeumann') {
+            if (isOddRow) {
+                return [
+                    [-1, 0], [1, 0], // W, E
+                    [0, -1], [1, -1], // NW, NE
+                    [0, 1], [1, 1], // SW, SE
+                    [0, 0] // Center
+                ];
+            }
+            else {
+                return [
+                    [-1, 0], [1, 0], // W, E
+                    [-1, -1], [0, -1], // NW, NE
+                    [-1, 1], [0, 1], // SW, SE
+                    [0, 0] // Center
+                ];
+            }
         }
         else {
-            return [
-                [-1, 0], [1, 0], // W, E
-                [-1, -1], [0, -1], // NW, NE
-                [-1, 1], [0, 1], // SW, SE
-                [0, 0] // Center
-            ];
+            // Moore (12 neighbors: 6 edge + 6 vertex)
+            if (isOddRow) {
+                return [
+                    [-1, 0], [1, 0], // W, E
+                    [0, -1], [1, -1], // NW, NE
+                    [0, 1], [1, 1], // SW, SE
+                    [0, -2], [2, -1], [2, 1], [0, 2], [-1, 1], [-1, -1], // Corners
+                    [0, 0] // Center
+                ];
+            }
+            else {
+                return [
+                    [-1, 0], [1, 0], // W, E
+                    [-1, -1], [0, -1], // NW, NE
+                    [-1, 1], [0, 1], // SW, SE
+                    [0, -2], [1, -1], [1, 1], [0, 2], [-2, 1], [-2, -1], // Corners
+                    [0, 0] // Center
+                ];
+            }
         }
     }
     evaluateOuterSum(centerState, outerSum) {
@@ -417,7 +458,7 @@ export class TriangularGameOfLife extends OuterTotalisticCellularAutomaton {
      * @param survival Array of neighbor counts required to survive (default [1, 2])
      * @param birth Array of neighbor counts required to be born (default [2])
      */
-    constructor(survival = [1, 2], birth = [2], frequencyDomain = 0) {
+    constructor(survival = [1, 2], birth = [2], frequencyDomain = 0, neighborhoodType = 'vonNeumann') {
         const states = new Set([0, 1]);
         if (frequencyDomain > 0) {
             for (let i = 2; i < 2 * frequencyDomain; i++) {
@@ -426,6 +467,7 @@ export class TriangularGameOfLife extends OuterTotalisticCellularAutomaton {
         }
         super(2, states, [], // Dynamic evaluation overrides Neighborhood instantiation 
         0, frequencyDomain);
+        this.neighborhoodType = neighborhoodType;
         this.survivalRules = new Set(survival);
         this.birthRules = new Set(birth);
     }
@@ -433,17 +475,40 @@ export class TriangularGameOfLife extends OuterTotalisticCellularAutomaton {
         // (x + y) even = UP Triangle. Shares bottom edge.
         // (x + y) odd = DOWN Triangle. Shares top edge.
         const isUpTriangle = Math.abs(coord[0] + coord[1]) % 2 === 0;
-        if (isUpTriangle) {
-            return [
-                [-1, 0], [1, 0], [0, 1], // Left, Right, Bottom
-                [0, 0] // Center
-            ];
+        if (this.neighborhoodType === 'vonNeumann') {
+            if (isUpTriangle) {
+                return [
+                    [-1, 0], [1, 0], [0, 1], // Left, Right, Bottom
+                    [0, 0] // Center
+                ];
+            }
+            else {
+                return [
+                    [-1, 0], [1, 0], [0, -1], // Left, Right, Top
+                    [0, 0] // Center
+                ];
+            }
         }
         else {
-            return [
-                [-1, 0], [1, 0], [0, -1], // Left, Right, Top
-                [0, 0] // Center
-            ];
+            // Moore (12 neighbors: 3 edge + 9 vertex)
+            if (isUpTriangle) {
+                return [
+                    [-1, 0], [1, 0], [0, 1], // Edge
+                    [-1, -1], [0, -1], [1, -1], // Top
+                    [2, 0], [1, 1], [2, 1], // Bottom-Right
+                    [-2, 0], [-1, 1], [-2, 1], // Bottom-Left
+                    [0, 0] // Center
+                ];
+            }
+            else {
+                return [
+                    [-1, 0], [1, 0], [0, -1], // Edge
+                    [-1, 1], [0, 1], [1, 1], // Bottom
+                    [1, -1], [2, -1], [2, 0], // Top-Right
+                    [-2, 0], [-1, -1], [-2, -1], // Top-Left
+                    [0, 0] // Center
+                ];
+            }
         }
     }
     evaluateOuterSum(centerState, outerSum) {

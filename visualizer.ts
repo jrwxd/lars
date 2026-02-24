@@ -6,6 +6,7 @@ let GRID_HEIGHT = 100;
 let CELL_WIDTH = Math.floor(CANVAS_SIZE / GRID_WIDTH);
 let CELL_HEIGHT = Math.floor(CANVAS_SIZE / GRID_HEIGHT);
 const FPS = 15;
+let isPaused = false;
 
 /**
  * A Strict Lattice Domain that enforces a hard border constraint.
@@ -62,6 +63,7 @@ export function initializeSimulation() {
     const configType = (document.getElementById('configType') as HTMLSelectElement).value;
     const domainType = (document.getElementById('domainType') as HTMLSelectElement).value;
     const topologyType = (document.getElementById('topologyType') as HTMLSelectElement).value;
+    const neighborhoodType = (document.getElementById('neighborhoodType') as HTMLSelectElement).value as 'moore' | 'vonNeumann';
     const frequencyDomainRaw = (document.getElementById('frequencyDomain') as HTMLSelectElement)?.value || '0';
 
     const frequencyDomain = parseInt(frequencyDomainRaw) || 0;
@@ -69,7 +71,9 @@ export function initializeSimulation() {
     const rawSurvival = (document.getElementById('survivalRules') as HTMLInputElement).value;
     const rawBirth = (document.getElementById('birthRules') as HTMLInputElement).value;
 
-    const parseRules = (str: string) => str.split('').filter(c => /[0-9]/.test(c)).map(Number);
+    // Use base 36 to dynamically map arbitrary alphabet bounds (10=A, 11=B, 12=C). 
+    // Filter safely limits it precisely into mathematically valid parsed numbers up to C (12).
+    const parseRules = (str: string) => str.split('').filter(c => /[0-9a-c]/i.test(c)).map(c => parseInt(c, 36));
 
     const survivalRules = parseRules(rawSurvival);
     const birthRules = parseRules(rawBirth);
@@ -96,11 +100,11 @@ export function initializeSimulation() {
 
     // 0. Resolve Mathematical Totalistic Ruleset based on Topology
     if (topologyType === 'triangular') {
-        ca = new TriangularGameOfLife(survivalRules, birthRules, frequencyDomain);
+        ca = new TriangularGameOfLife(survivalRules, birthRules, frequencyDomain, neighborhoodType);
     } else if (topologyType === 'hexagonal') {
-        ca = new HexagonalGameOfLife(survivalRules, birthRules, frequencyDomain);
+        ca = new HexagonalGameOfLife(survivalRules, birthRules, frequencyDomain, neighborhoodType);
     } else {
-        ca = new GameOfLife(survivalRules, birthRules, frequencyDomain);
+        ca = new GameOfLife(survivalRules, birthRules, frequencyDomain, neighborhoodType);
     }
 
     // 1. Resolve State Storage Model
@@ -262,14 +266,21 @@ if (typeof window !== 'undefined') {
 
         document.getElementById('randomRuleBtn')?.addEventListener('click', () => {
             const topologyType = (document.getElementById('topologyType') as HTMLSelectElement).value;
+            const neighborhoodType = (document.getElementById('neighborhoodType') as HTMLSelectElement).value;
+
             let maxNeighbors = 8;
-            if (topologyType === 'hexagonal') maxNeighbors = 6;
-            if (topologyType === 'triangular') maxNeighbors = 3;
+            if (topologyType === 'hexagonal') {
+                maxNeighbors = neighborhoodType === 'moore' ? 12 : 6;
+            } else if (topologyType === 'triangular') {
+                maxNeighbors = neighborhoodType === 'moore' ? 12 : 3;
+            } else {
+                maxNeighbors = neighborhoodType === 'moore' ? 8 : 4;
+            }
 
             const generateRandomRule = () => {
                 const rule = [];
                 for (let i = 0; i <= maxNeighbors; i++) {
-                    if (Math.random() > 0.5) rule.push(i);
+                    if (Math.random() > 0.5) rule.push(i.toString(36).toUpperCase());
                 }
                 return rule.join('');
             };
@@ -279,6 +290,7 @@ if (typeof window !== 'undefined') {
             initializeSimulation();
         });
 
+        document.getElementById('neighborhoodType')?.addEventListener('change', initializeSimulation);
         document.getElementById('frequencyDomain')?.addEventListener('change', initializeSimulation);
         document.getElementById('topologyType')?.addEventListener('change', initializeSimulation);
         document.getElementById('configType')?.addEventListener('change', initializeSimulation);
@@ -288,12 +300,33 @@ if (typeof window !== 'undefined') {
         document.getElementById('gridWidth')?.addEventListener('change', initializeSimulation);
         document.getElementById('gridHeight')?.addEventListener('change', initializeSimulation);
 
+        // Global Keyboard Listeners
+        window.addEventListener('keydown', (e) => {
+            // Ignore if typing in an input field natively
+            if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'SELECT') return;
+
+            switch (e.key.toLowerCase()) {
+                case ' ':
+                    isPaused = !isPaused;
+                    e.preventDefault();
+                    break;
+                case 'r':
+                    initializeSimulation();
+                    break;
+                case 't':
+                    document.getElementById('randomRuleBtn')?.click();
+                    break;
+            }
+        });
+
         // Start 
         initializeSimulation();
 
         intervalId = window.setInterval(() => {
             draw();
-            update();
+            if (!isPaused) {
+                update();
+            }
         }, 1000 / FPS);
     };
 }
