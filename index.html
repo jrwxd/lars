@@ -10,7 +10,6 @@
             background-color: #050505;
             color: #ddd;
             display: flex;
-            flex-direction: column;
             justify-content: center;
             align-items: center;
             height: 100vh;
@@ -19,21 +18,62 @@
             overflow: hidden;
         }
 
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            z-index: 10;
+        }
+
+        #toggleUIBtn {
+            margin-bottom: 10px;
+            background: #222;
+            color: #fff;
+            border: 1px solid #444;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            z-index: 11;
+            transition: all 0.2s ease;
+            font-weight: bold;
+        }
+
+        #toggleUIBtn:hover {
+            border-color: #0f0;
+            color: #0f0;
+        }
+
         #controls {
             display: flex;
-            gap: 20px;
-            background: #111;
-            padding: 15px 30px;
+            flex-direction: column;
+            gap: 15px;
+            background: rgba(17, 17, 17, 0.85);
+            backdrop-filter: blur(5px);
+            padding: 20px;
             border-radius: 8px;
             box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
-            margin-bottom: 20px;
             border: 1px solid #333;
+            max-height: calc(100vh - 100px);
+            overflow-y: auto;
+            transition: opacity 0.3s ease, transform 0.3s ease, visibility 0.3s;
+            transform-origin: top right;
+        }
+
+        #controls.hidden {
+            opacity: 0;
+            visibility: hidden;
+            transform: scale(0.95) translateY(-10px);
+            pointer-events: none;
         }
 
         .control-group {
             display: flex;
+            justify-content: space-between;
             align-items: center;
-            gap: 10px;
+            gap: 20px;
         }
 
         label {
@@ -80,79 +120,110 @@
 </head>
 
 <body>
-    <div id="controls">
-        <div class="control-group">
-            <label for="configType">Configuration (Storage)</label>
-            <select id="configType">
-                <option value="dense">Dense (Array Buffer)</option>
-                <option value="sparse">Sparse (Hash Map)</option>
-            </select>
-        </div>
+    <div id="ui-layer">
+        <button id="toggleUIBtn">⚙ Toggle Settings</button>
+        <div id="controls">
+            <div class="control-group">
+                <label for="configType">Configuration (Storage)</label>
+                <select id="configType">
+                    <option value="dense">Dense (Array Buffer)</option>
+                    <option value="sparse">Sparse (Hash Map)</option>
+                </select>
+            </div>
 
-        <div class="control-group">
-            <label for="frequencyDomain">Frequency States (N)</label>
-            <input type="number" id="frequencyDomain" value="0" min="0" max="100" style="width: 50px;"
-                title="0 = Disabled (Binary), N > 0 = 2N Temporal History States">
-        </div>
+            <div class="control-group">
+                <label for="frequencyDomain">Frequency States (N)</label>
+                <input type="number" id="frequencyDomain" value="0" min="0" max="100" style="width: 50px;"
+                    title="0 = Disabled (Binary), N > 0 = 2N Temporal History States">
+            </div>
 
-        <div class="control-group">
-            <label for="topologyType">Lattice Topology</label>
-            <select id="topologyType">
-                <option value="square" title="Max 4/8 neighbors">Square Grid</option>
-                <option value="hexagonal" title="Max 6/12 neighbors">Hexagonal Grid</option>
-                <option value="triangular" title="Max 3/12 neighbors">Triangular Grid</option>
-            </select>
-        </div>
+            <div class="control-group">
+                <label for="colorStrategy">Color Strategy</label>
+                <select id="colorStrategy">
+                    <option value="cyclical" title="Rotates color based on time of genesis">Cyclical Genesis (Time)
+                    </option>
+                    <option value="monochrome" title="Classic monochrome green">Static Monochrome (Classic)</option>
+                </select>
+            </div>
 
-        <div class="control-group">
-            <label for="neighborhoodType">Neighborhood Rule</label>
-            <select id="neighborhoodType">
-                <option value="moore" title="Vertices included">Moore (Max Neighbors)</option>
-                <option value="vonNeumann" title="Edges only">Von Neumann (Edge Neighbors)</option>
-            </select>
-        </div>
+            <div class="control-group">
+                <label for="topologyType">Lattice Topology</label>
+                <select id="topologyType">
+                    <option value="square" title="Max 4/8 neighbors">Square Grid</option>
+                    <option value="hexagonal" title="Max 6/12 neighbors">Hexagonal Grid</option>
+                    <option value="triangular" title="Max 3/12 neighbors">Triangular Grid</option>
+                </select>
+            </div>
 
-        <div class="control-group">
-            <label for="domainType">Lattice Domain (Bounds)</label>
-            <select id="domainType">
-                <option value="toroidal">Toroidal (Periodic Wrap)</option>
-                <option value="strict">Strict (Vacuum Dead Borders)</option>
-                <option value="cylindrical">Cylindrical (Wrap X)</option>
-                <option value="mobius">Mobius Strip (Twist Wrap X)</option>
-                <option value="klein">Klein Bottle (Twisted Torus)</option>
-            </select>
-        </div>
+            <div class="control-group">
+                <label for="neighborhoodType">Neighborhood Rule</label>
+                <select id="neighborhoodType">
+                    <option value="moore" title="Vertices included">Moore (Max Neighbors)</option>
+                    <option value="vonNeumann" title="Edges only">Von Neumann (Edge Neighbors)</option>
+                </select>
+            </div>
 
-        <div class="control-group">
-            <label for="gridWidth">Width</label>
-            <input type="number" id="gridWidth" value="100" min="10" max="500" step="10" style="width: 70px;">
-        </div>
+            <div class="control-group">
+                <label for="domainType">Lattice Domain (Bounds)</label>
+                <select id="domainType">
+                    <option value="toroidal">Toroidal (Periodic Wrap)</option>
+                    <option value="strict">Strict (Vacuum Dead Borders)</option>
+                    <option value="cylindrical">Cylindrical (Wrap X)</option>
+                    <option value="mobius">Mobius Strip (Twist Wrap X)</option>
+                    <option value="klein">Klein Bottle (Twisted Torus)</option>
+                </select>
+            </div>
 
-        <div class="control-group">
-            <label for="gridHeight">Height</label>
-            <input type="number" id="gridHeight" value="100" min="10" max="500" step="10" style="width: 70px;">
-        </div>
+            <div class="control-group">
+                <label for="gridWidth">Width</label>
+                <input type="number" id="gridWidth" value="100" min="10" max="500" step="10" style="width: 70px;">
+            </div>
 
-        <div class="control-group">
-            <label for="survivalRules">Survival (S)</label>
-            <input type="text" id="survivalRules" value="23" style="width: 60px;"
-                title="Target states required for a living cell to survive">
-        </div>
+            <div class="control-group">
+                <label for="gridHeight">Height</label>
+                <input type="number" id="gridHeight" value="100" min="10" max="500" step="10" style="width: 70px;">
+            </div>
 
-        <div class="control-group">
-            <label for="birthRules">Birth (B)</label>
-            <input type="text" id="birthRules" value="3" style="width: 60px;"
-                title="Target states required for a dead cell to be born">
-        </div>
+            <div class="control-group">
+                <label for="survivalRules">Survival (S)</label>
+                <input type="text" id="survivalRules" value="23" style="width: 60px;"
+                    title="Target states required for a living cell to survive">
+            </div>
 
-        <button id="resetBtn">Restart Ecosystem</button>
-        <button id="randomRuleBtn">Random Rule</button>
+            <div class="control-group">
+                <label for="birthRules">Birth (B)</label>
+                <input type="text" id="birthRules" value="3" style="width: 60px;"
+                    title="Target states required for a dead cell to be born">
+            </div>
+
+            <div class="control-group">
+                <label for="seedInput">Initialization Seed</label>
+                <input type="text" id="seedInput" value="" style="width: 100px;"
+                    title="Seed for reproducible generations. Blank = random.">
+                <button id="exportStateBtn" title="Export current generation to Seed box">Export State</button>
+            </div>
+
+            <button id="resetBtn">Restart Ecosystem</button>
+            <button id="randomRuleBtn">Random Rule</button>
+        </div>
+    </div>
+
+    <div id="kb-guide">
+        <div style="font-weight: bold; margin-bottom: 8px; color: #fff;">Keyboard Controls</div>
+        <div><kbd>Space</kbd> Play / Pause</div>
+        <div style="margin-top: 4px;"><kbd>R</kbd> Restart Grid</div>
+        <div style="margin-top: 4px;"><kbd>T</kbd> Randomize Rules</div>
     </div>
 
     <div id="canvas-container">
         <!-- The canvas is injected dynamically via visualizer.js -->
     </div>
 
+    <script>
+        document.getElementById('toggleUIBtn').addEventListener('click', () => {
+            document.getElementById('controls').classList.toggle('hidden');
+        });
+    </script>
     <script type="module" src="dist/visualizer.js"></script>
 </body>
 

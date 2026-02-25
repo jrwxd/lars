@@ -157,7 +157,8 @@ export class CellularAutomaton {
      */
     isQuiescentStateRigorous() {
         const quiescentConfig = this.neighborhood.map(() => this.quiescentState);
-        return this.transition(quiescentConfig) === this.quiescentState;
+        // Generation parameter is irrelevant for quiescent checks which must be structurally invariant
+        return this.transition(quiescentConfig, 0) === this.quiescentState;
     }
     /**
      * Retrieves the structural neighborhood offsets for a given absolute coordinate.
@@ -178,8 +179,9 @@ export class CellularAutomaton {
      * @param targetCells The finite sequence of cell coordinates to inherently simulate.
      * @param nextConfig The targeted global configuration C' at time t+1 to structurally mutate.
      * @param domain The finite lattice domain resolving arbitrary physical boundaries.
+     * @param generation The current global time tick t.
      */
-    evolve(currentConfig, targetCells, nextConfig, domain) {
+    evolve(currentConfig, targetCells, nextConfig, domain, generation) {
         for (const targetCoord of targetCells) {
             // 1. Construct the neighborhood vector mappings for target cell `c`: c + n_i
             // Dynamically query offsets to support non-rectangular topologies (Hex/Tri)
@@ -195,10 +197,10 @@ export class CellularAutomaton {
                 return currentConfig.getState(resolvedCoord);
             });
             // 2. Evaluate f(S^{|N|}) -> s'
-            const nextState = this.transition(neighborStates);
+            const nextState = this.transition(neighborStates, generation);
             // 3. Mathematical domain enforcement
             if (!this.states.has(nextState)) {
-                throw new Error(`State violation: Transition output ${String(nextState)} is not an element of S.`);
+                throw new Error(`State violation: Transition output ${String(nextState)} is not an element of S. Allowed States: ${Array.from(this.states).join(', ')}`);
             }
             // 4. Update C'(c) = s' (Applying boundary limits to mutate the underlying storage map)
             const mappedTargetCoord = domain.resolveBoundary(targetCoord);
@@ -250,22 +252,23 @@ export class OuterTotalisticCellularAutomaton extends CellularAutomaton {
      * Assumes the central cell is the designated `centerIndex` (defaults to the last item in the neighborhood).
      *
      * @param config The full neighborhood configuration.
+     * @param generation The current global chronological generation tracking genesis shifts.
      */
-    transition(config) {
+    transition(config, generation) {
         // By convention, if not overridden, assume the last element is the center cell [0, ..., 0]
         const centerIndex = config.length - 1;
         const centerStateRaw = config[centerIndex];
         let centerStateBase = centerStateRaw;
         let outerSum = 0;
         if (this.frequencyDomain > 0) {
-            // Frequency Domain > 0 constraint:
-            // 2N states (N = frequencyDomain). 
-            // 1 to N are alive states (1 = a0, N = stable alive)
-            // N+1 to 2N-1 are dead states (N+1 = d0), 0 is strictly dead
-            centerStateBase = (centerStateRaw > 0 && centerStateRaw <= this.frequencyDomain) ? 1 : 0;
+            // Frequency Domain > 0 with Time-Based Genesis:
+            // S = [0, N]. 
+            // 0 is dead.
+            // 1 to N are alive states, mapping color cyclically based on birth generation.
+            centerStateBase = centerStateRaw > 0 ? 1 : 0;
             for (let i = 0; i < config.length; i++) {
                 if (i !== centerIndex) {
-                    const isAlive = (config[i] > 0 && config[i] <= this.frequencyDomain) ? 1 : 0;
+                    const isAlive = config[i] > 0 ? 1 : 0;
                     outerSum += isAlive;
                 }
             }
@@ -279,28 +282,20 @@ export class OuterTotalisticCellularAutomaton extends CellularAutomaton {
         }
         const nextStateBase = this.evaluateOuterSum(centerStateBase, outerSum);
         if (this.frequencyDomain > 0) {
-            if (centerStateBase === 0) {
-                // Was logically dead
-                if (nextStateBase === 1)
-                    return 1; // Dead -> Alive (a0=1)
-                // Dead -> Dead
-                if (centerStateRaw === 0)
-                    return 0; // Strictly dead stays 0
-                const nextDead = centerStateRaw + 1;
-                return nextDead >= 2 * this.frequencyDomain ? 0 : nextDead;
-            }
-            else {
-                // Was logically alive
-                if (nextStateBase === 1) {
-                    // Alive -> Alive
-                    if (centerStateRaw === this.frequencyDomain)
-                        return this.frequencyDomain; // Stable alive
-                    return centerStateRaw + 1;
+            if (nextStateBase === 1) {
+                if (centerStateBase === 0) {
+                    // Dead -> Alive (Genesis). Assign cyclical color state based on global generation time.
+                    // Math: 1 to N cyclically. 
+                    return (generation % this.frequencyDomain) + 1;
                 }
                 else {
-                    // Alive -> Dead
-                    return this.frequencyDomain + 1; // (d0)
+                    // Alive -> Alive (Static continuation of its origin state).
+                    return centerStateRaw;
                 }
+            }
+            else {
+                // Instantly Dead (No decay trails).
+                return 0;
             }
         }
         return nextStateBase;
@@ -323,7 +318,7 @@ export class GameOfLife extends OuterTotalisticCellularAutomaton {
     constructor(survival = [2, 3], birth = [3], frequencyDomain = 0, neighborhoodType = 'moore') {
         const states = new Set([0, 1]);
         if (frequencyDomain > 0) {
-            for (let i = 2; i < 2 * frequencyDomain; i++) {
+            for (let i = 2; i <= frequencyDomain; i++) {
                 states.add(i);
             }
         }
@@ -386,7 +381,7 @@ export class HexagonalGameOfLife extends OuterTotalisticCellularAutomaton {
     constructor(survival = [3, 4], birth = [2], frequencyDomain = 0, neighborhoodType = 'vonNeumann') {
         const states = new Set([0, 1]);
         if (frequencyDomain > 0) {
-            for (let i = 2; i < 2 * frequencyDomain; i++) {
+            for (let i = 2; i <= frequencyDomain; i++) {
                 states.add(i);
             }
         }
@@ -461,7 +456,7 @@ export class TriangularGameOfLife extends OuterTotalisticCellularAutomaton {
     constructor(survival = [1, 2], birth = [2], frequencyDomain = 0, neighborhoodType = 'vonNeumann') {
         const states = new Set([0, 1]);
         if (frequencyDomain > 0) {
-            for (let i = 2; i < 2 * frequencyDomain; i++) {
+            for (let i = 2; i <= frequencyDomain; i++) {
                 states.add(i);
             }
         }

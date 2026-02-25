@@ -6,6 +6,28 @@ let CELL_WIDTH = Math.floor(CANVAS_SIZE / GRID_WIDTH);
 let CELL_HEIGHT = Math.floor(CANVAS_SIZE / GRID_HEIGHT);
 const FPS = 15;
 let isPaused = false;
+let globalGeneration = 0;
+class CyclicalGenesisColorStrategy {
+    getColor(state, frequencyDomain) {
+        if (state === 0)
+            return null; // strictly dead background (Black)
+        if (frequencyDomain > 0) {
+            // Alive states: 1 to N
+            const ratio = frequencyDomain === 1 ? 0 : (state - 1) / (frequencyDomain - 1);
+            const hue = Math.floor(ratio * 360);
+            return `hsl(${hue}, 100%, 50%)`;
+        }
+        return '#0f0'; // Default Vibrant Green
+    }
+}
+class MonochromeColorStrategy {
+    getColor(state, frequencyDomain) {
+        if (state === 0)
+            return null; // strictly dead background (Black)
+        return '#0f0'; // Default Vibrant Green
+    }
+}
+let activeColorStrategy = new CyclicalGenesisColorStrategy();
 /**
  * A Strict Lattice Domain that enforces a hard border constraint.
  * If a coordinate extends past [0, GRID_WIDTH-1], it resolves to mathematical `null` (Vacuum).
@@ -42,20 +64,113 @@ let nextConfig;
 let domain;
 let intervalId = null;
 let ctx = null;
+// -- PRNG Utilities for reproducible states --
+function xmur3(str) {
+    for (var i = 0, h = 1779033703 ^ str.length; i < str.length; i++) {
+        h = Math.imul(h ^ str.charCodeAt(i), 3432918353);
+        h = h << 13 | h >>> 19;
+    }
+    return function () {
+        h = Math.imul(h ^ h >>> 16, 2246822507);
+        h = Math.imul(h ^ h >>> 13, 3266489909);
+        return (h ^= h >>> 16) >>> 0;
+    };
+}
+function mulberry32(a) {
+    return function () {
+        var t = a += 0x6D2B79F5;
+        t = Math.imul(t ^ t >>> 15, t | 1);
+        t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+}
+let rng = Math.random;
+let loadedState = null;
+export function exportStateToSeed() {
+    const activeCells = [];
+    if (currentConfig instanceof SparseConfiguration) {
+        for (const coord of currentConfig.getActiveCoordinates()) {
+            activeCells.push([coord[0], coord[1], currentConfig.getState(coord)]);
+        }
+    }
+    else {
+        for (const coord of simulationBounds) {
+            const state = currentConfig.getState(coord);
+            if (state !== 0) {
+                activeCells.push([coord[0], coord[1], state]);
+            }
+        }
+    }
+    const exportObj = {
+        generation: globalGeneration,
+        cells: activeCells
+    };
+    const jsonStr = JSON.stringify(exportObj);
+    const b64 = btoa(jsonStr);
+    const stateString = `STATE:${b64}`;
+    const seedEl = document.getElementById('seedInput');
+    if (seedEl) {
+        seedEl.value = stateString;
+        seedEl.style.backgroundColor = '#053005';
+        setTimeout(() => seedEl.style.backgroundColor = '', 300);
+    }
+    console.log(`Exported Board State (Generation ${globalGeneration}):`, stateString);
+}
 function seedEcosystem() {
+    if (loadedState && loadedState.cells) {
+        globalGeneration = loadedState.generation || 0;
+        for (const cell of loadedState.cells) {
+            if (cell.length >= 3) {
+                if (cell[0] >= 0 && cell[0] < GRID_WIDTH && cell[1] >= 0 && cell[1] < GRID_HEIGHT) {
+                    currentConfig.setState([cell[0], cell[1]], cell[2]);
+                }
+            }
+        }
+        return;
+    }
     for (let x = 0; x < GRID_WIDTH; x++) {
         for (let y = 0; y < GRID_HEIGHT; y++) {
             // Give a 20% chance of a cell being alive in the inner 50% core
             const isCenter = x > GRID_WIDTH * 0.25 && x < GRID_WIDTH * 0.75 && y > GRID_HEIGHT * 0.25 && y < GRID_HEIGHT * 0.75;
-            const state = (isCenter && Math.random() < 0.2) ? 1 : 0;
+            const state = (isCenter && rng() < 0.2) ? 1 : 0;
             currentConfig.setState([x, y], state);
         }
     }
 }
 export function initializeSimulation() {
+    globalGeneration = 0; // Reset temporal state
     const configType = document.getElementById('configType').value;
     const domainType = document.getElementById('domainType').value;
     const topologyType = document.getElementById('topologyType').value;
+    const colorStrategyType = document.getElementById('colorStrategy')?.value || 'cyclical';
+    let seedInputEl = document.getElementById('seedInput');
+    let seedStringFromInput = seedInputEl?.value?.trim() || '';
+    let isStateLoad = false;
+    loadedState = null;
+    if (seedStringFromInput.startsWith('STATE:')) {
+        try {
+            const jsonStr = atob(seedStringFromInput.substring(6));
+            loadedState = JSON.parse(jsonStr);
+            isStateLoad = true;
+        }
+        catch (e) {
+            console.error("Failed to parse board state from seed input", e);
+        }
+    }
+    if (!isStateLoad && !seedStringFromInput) {
+        seedStringFromInput = Math.random().toString(36).substring(2, 10);
+        if (seedInputEl)
+            seedInputEl.value = seedStringFromInput;
+    }
+    const seedString = seedStringFromInput || 'default-seed';
+    const seedFunc = xmur3(seedString);
+    rng = mulberry32(seedFunc());
+    if (colorStrategyType === 'monochrome') {
+        activeColorStrategy = new MonochromeColorStrategy();
+    }
+    else {
+        activeColorStrategy = new CyclicalGenesisColorStrategy();
+    }
     const neighborhoodType = document.getElementById('neighborhoodType').value;
     const frequencyDomainRaw = document.getElementById('frequencyDomain')?.value || '0';
     const frequencyDomain = parseInt(frequencyDomainRaw) || 0;
@@ -77,11 +192,20 @@ export function initializeSimulation() {
         CELL_WIDTH = CANVAS_SIZE / (GRID_WIDTH + 0.5);
         CELL_HEIGHT = CANVAS_SIZE / GRID_HEIGHT;
     }
-    else {
-        CELL_WIDTH = CANVAS_SIZE / GRID_WIDTH;
-        CELL_HEIGHT = CANVAS_SIZE / GRID_HEIGHT;
-    }
-    console.log(`Re-initializing Simulation: [Topology=${topologyType}] [Storage=${configType}] [Domain=${domainType}] [FD=${frequencyDomain}] [B${birthRules.join('')}/S${survivalRules.join('')}] [Size=${GRID_WIDTH}x${GRID_HEIGHT}]`);
+    const configData = {
+        seed: seedString,
+        topology: topologyType,
+        storage: configType,
+        domain: domainType,
+        frequencyDomain: frequencyDomain,
+        birthRules: birthRules.join(''),
+        survivalRules: survivalRules.join(''),
+        width: GRID_WIDTH,
+        height: GRID_HEIGHT,
+        colorStrategy: colorStrategyType,
+        neighborhood: neighborhoodType
+    };
+    console.log(`Re-initializing Simulation with Config:\n`, JSON.stringify(configData, null, 2));
     simulationBounds = createSimulationBounds(GRID_WIDTH, GRID_HEIGHT);
     dimensions = [GRID_WIDTH, GRID_HEIGHT];
     // 0. Resolve Mathematical Totalistic Ruleset based on Topology
@@ -133,25 +257,10 @@ export function draw() {
     const drawCell = (x, y, state) => {
         if (!ctx)
             return;
-        if (frequencyDomain > 0) {
-            if (state === 0)
-                return; // dN: strictly dead background (Black)
-            const n = frequencyDomain;
-            if (state > 0 && state <= n) {
-                // Alive states: a_0 to a_n
-                // Vibrant Green (0, 255, 0) to White (255, 255, 255)
-                const ratio = n === 1 ? 0 : (state - 1) / (n - 1);
-                const v = Math.floor(ratio * 255);
-                ctx.fillStyle = `rgb(${v}, 255, ${v})`;
-            }
-            else if (state > n && state < 2 * n) {
-                // Dead states (trailing): d_0 to d_{n-1}
-                // Fresh Blood Red (255, 0, 0) to Black (0, 0, 0)
-                const ratio = (state - (n + 1)) / n;
-                const r = Math.floor(255 * (1 - ratio));
-                ctx.fillStyle = `rgb(${r}, 0, 0)`;
-            }
-        }
+        const color = activeColorStrategy.getColor(state, frequencyDomain);
+        if (!color)
+            return; // Background void (0)
+        ctx.fillStyle = color;
         if (topologyType === 'hexagonal') {
             const isOddRow = Math.abs(y) % 2 === 1;
             const xOffset = isOddRow ? CELL_WIDTH * 0.5 : 0;
@@ -217,7 +326,8 @@ export function draw() {
 export function update() {
     // Math: G: C -> C' 
     // Uses the selected topological domain constraint map and the selected storage array math.
-    ca.evolve(currentConfig, simulationBounds, nextConfig, domain);
+    ca.evolve(currentConfig, simulationBounds, nextConfig, domain, globalGeneration);
+    globalGeneration++;
     // Swap buffers (C' becomes C)
     const temp = currentConfig;
     currentConfig = nextConfig;
@@ -248,6 +358,7 @@ if (typeof window !== 'undefined') {
         document.getElementById('resetBtn')?.addEventListener('click', () => {
             initializeSimulation();
         });
+        document.getElementById('exportStateBtn')?.addEventListener('click', exportStateToSeed);
         document.getElementById('randomRuleBtn')?.addEventListener('click', () => {
             const topologyType = document.getElementById('topologyType').value;
             const neighborhoodType = document.getElementById('neighborhoodType').value;
@@ -273,6 +384,7 @@ if (typeof window !== 'undefined') {
             document.getElementById('birthRules').value = generateRandomRule();
             initializeSimulation();
         });
+        document.getElementById('colorStrategy')?.addEventListener('change', initializeSimulation);
         document.getElementById('neighborhoodType')?.addEventListener('change', initializeSimulation);
         document.getElementById('frequencyDomain')?.addEventListener('change', initializeSimulation);
         document.getElementById('topologyType')?.addEventListener('change', initializeSimulation);
