@@ -13,6 +13,7 @@
  * Since L is infinite, derived implementations manage this storage (e.g., hash maps, arrays, sparse matrices).
  */
 export class GlobalConfiguration {
+    quiescentState;
     /**
      * @param quiescentState The default state for uninitialized bounds of the lattice.
      */
@@ -32,6 +33,7 @@ export class LatticeDomain {
  * Maps coordinates continuously by wrapping them modulo the size of the dimension.
  */
 export class ToroidalDomain extends LatticeDomain {
+    dimensions;
     constructor(dimensions) {
         super();
         this.dimensions = dimensions;
@@ -51,6 +53,7 @@ export class ToroidalDomain extends LatticeDomain {
  * Evaluates to vacuum (null) if coordinates exceed structural bounds.
  */
 export class StrictDomain extends LatticeDomain {
+    dimensions;
     constructor(dimensions) {
         super();
         this.dimensions = dimensions;
@@ -69,6 +72,7 @@ export class StrictDomain extends LatticeDomain {
  * Wraps periodically along the X-axis (Dimension 0), but enforces hard boundaries on the Y-axis.
  */
 export class CylindricalDomain extends LatticeDomain {
+    dimensions;
     constructor(dimensions) {
         super();
         this.dimensions = dimensions;
@@ -88,6 +92,7 @@ export class CylindricalDomain extends LatticeDomain {
  * Enforces strict hard boundaries on the Y-axis.
  */
 export class MobiusDomain extends LatticeDomain {
+    dimensions;
     constructor(dimensions) {
         super();
         this.dimensions = dimensions;
@@ -113,6 +118,7 @@ export class MobiusDomain extends LatticeDomain {
  * Wraps periodically along both axes, but the X-axis wrap contains a Mobius twist (inverts Y).
  */
 export class KleinBottleDomain extends LatticeDomain {
+    dimensions;
     constructor(dimensions) {
         super();
         this.dimensions = dimensions;
@@ -136,6 +142,10 @@ export class KleinBottleDomain extends LatticeDomain {
  * Abstract mathematical structure for the Cellular Automaton A = (L, S, N, f).
  */
 export class CellularAutomaton {
+    dimensions;
+    states;
+    neighborhood;
+    quiescentState;
     /**
      * @param dimensions The dimensionality of the regular lattice L (e.g., 1, 2, 3).
      * @param states The finite set of possible states S.
@@ -241,61 +251,70 @@ export class TotalisticCellularAutomaton extends CellularAutomaton {
  * We assume by convention that the LAST element in the neighborhood `N` is the central cell `(0,0,...,0)`.
  */
 export class OuterTotalisticCellularAutomaton extends CellularAutomaton {
-    constructor(dimensions, states, neighborhood, quiescentState, frequencyDomain = 0) {
+    frequencyDomain;
+    useNetherstate;
+    constructor(dimensions, states, neighborhood, quiescentState, frequencyDomain = 0, useNetherstate = false) {
         super(dimensions, states, neighborhood, quiescentState);
         this.frequencyDomain = frequencyDomain;
+        this.useNetherstate = useNetherstate;
     }
     /**
      * Overrides the general transition function.
      * It partitions the configuration into the center state and the remaining outer states.
      *
-     * Assumes the central cell is the designated `centerIndex` (defaults to the last item in the neighborhood).
-     *
      * @param config The full neighborhood configuration.
      * @param generation The current global chronological generation tracking genesis shifts.
      */
     transition(config, generation) {
-        // By convention, if not overridden, assume the last element is the center cell [0, ..., 0]
+        // By convention, assume the last element is the center cell [0, ..., 0]
         const centerIndex = config.length - 1;
         const centerStateRaw = config[centerIndex];
         let centerStateBase = centerStateRaw;
-        let outerSum = 0;
-        if (this.frequencyDomain > 0) {
-            // Frequency Domain > 0 with Time-Based Genesis:
-            // S = [0, N]. 
-            // 0 is dead.
-            // 1 to N are alive states, mapping color cyclically based on birth generation.
+        let outerAliveSum = 0;
+        let outerNetherSum = 0;
+        // Map rendering states (which might rotate 1-N for frequency domain) to mathematical states (0, 1, 2)
+        if (this.useNetherstate) {
+            // Frequency Domain is disabled when Netherstate is active.
+            centerStateBase = centerStateRaw; // 0 (Dead), 1 (Alive), 2 (Nether)
+            for (let i = 0; i < config.length; i++) {
+                if (i !== centerIndex) {
+                    if (config[i] === 1)
+                        outerAliveSum++;
+                    else if (config[i] === 2)
+                        outerNetherSum++;
+                }
+            }
+        }
+        else if (this.frequencyDomain > 0) {
             centerStateBase = centerStateRaw > 0 ? 1 : 0;
             for (let i = 0; i < config.length; i++) {
                 if (i !== centerIndex) {
                     const isAlive = config[i] > 0 ? 1 : 0;
-                    outerSum += isAlive;
+                    outerAliveSum += isAlive;
                 }
             }
         }
         else {
             for (let i = 0; i < config.length; i++) {
                 if (i !== centerIndex) {
-                    outerSum += config[i];
+                    // In a binary CA, adding the item is equivalent to counting `1`s.
+                    outerAliveSum += config[i];
                 }
             }
         }
-        const nextStateBase = this.evaluateOuterSum(centerStateBase, outerSum);
-        if (this.frequencyDomain > 0) {
+        const nextStateBase = this.evaluateOuterSum(centerStateBase, outerAliveSum, outerNetherSum);
+        // Apply Frequency Domain Cyclical Coloring if active (and Netherstate is off)
+        if (this.frequencyDomain > 0 && !this.useNetherstate) {
             if (nextStateBase === 1) {
                 if (centerStateBase === 0) {
-                    // Dead -> Alive (Genesis). Assign cyclical color state based on global generation time.
-                    // Math: 1 to N cyclically. 
                     return (generation % this.frequencyDomain) + 1;
                 }
                 else {
-                    // Alive -> Alive (Static continuation of its origin state).
                     return centerStateRaw;
                 }
             }
             else {
-                // Instantly Dead (No decay trails).
-                return 0;
+                return 0; // Dead
             }
         }
         return nextStateBase;
@@ -311,13 +330,16 @@ export class OuterTotalisticCellularAutomaton extends CellularAutomaton {
  * - Quiescent State q = 0
  */
 export class GameOfLife extends OuterTotalisticCellularAutomaton {
-    /**
-     * @param survival Array of neighbor counts required to survive (default [2, 3])
-     * @param birth Array of neighbor counts required to be born (default [3])
-     */
-    constructor(survival = [2, 3], birth = [3], frequencyDomain = 0, neighborhoodType = 'moore') {
+    neighborhoodType;
+    survivalRules;
+    birthRules;
+    netherRules;
+    constructor(survival = [2, 3], birth = [3], nether = null, frequencyDomain = 0, neighborhoodType = 'moore', useNetherstate = false) {
         const states = new Set([0, 1]);
-        if (frequencyDomain > 0) {
+        if (useNetherstate) {
+            states.add(2);
+        }
+        else if (frequencyDomain > 0) {
             for (let i = 2; i <= frequencyDomain; i++) {
                 states.add(i);
             }
@@ -331,10 +353,11 @@ export class GameOfLife extends OuterTotalisticCellularAutomaton {
             [-1, 1], [0, 1], [1, 1],
             [0, 0] // Convention: Center cell must be the final index.
         ], 0, // q = 0 (Dead state by default)
-        frequencyDomain);
+        frequencyDomain, useNetherstate);
         this.neighborhoodType = neighborhoodType;
-        this.survivalRules = new Set(survival);
-        this.birthRules = new Set(birth);
+        this.survivalRules = Array.isArray(survival) ? new Set(survival) : survival;
+        this.birthRules = Array.isArray(birth) ? new Set(birth) : birth;
+        this.netherRules = nether ? (Array.isArray(nether) ? new Set(nether) : nether) : null;
     }
     getNeighborhoodOffsets(coord) {
         if (this.neighborhoodType === 'vonNeumann') {
@@ -352,20 +375,30 @@ export class GameOfLife extends OuterTotalisticCellularAutomaton {
             ];
         }
     }
-    /**
-     * The rigorous transition function f(s_center, outerSum).
-     * Evaluates dynamically against the initialized ruleset (e.g. B3/S23, B36/S23).
-     *
-     * @param centerState The current state of the cell (0 or 1).
-     * @param outerSum The sum of its 8 Moore neighbors (0 to 8).
-     * @returns Next state.
-     */
-    evaluateOuterSum(centerState, outerSum) {
-        if (centerState === 1) {
-            return this.survivalRules.has(outerSum) ? 1 : 0;
+    evaluateRule(ruleObj, aliveSum, netherSum) {
+        if (ruleObj instanceof Set) {
+            return ruleObj.has(aliveSum);
         }
         else {
-            return this.birthRules.has(outerSum) ? 1 : 0;
+            return ruleObj.aliveTarget.has(aliveSum) && ruleObj.netherTarget.has(netherSum);
+        }
+    }
+    evaluateOuterSum(centerState, outerAliveSum, outerNetherSum) {
+        if (centerState === 1) { // Alive
+            if (this.evaluateRule(this.survivalRules, outerAliveSum, outerNetherSum))
+                return 1;
+            // Plunge to Nether if flag is on and failed survival
+            return this.useNetherstate ? 2 : 0;
+        }
+        else if (centerState === 2) { // Nether
+            if (this.netherRules && this.evaluateRule(this.netherRules, outerAliveSum, outerNetherSum))
+                return 1; // Resurrect
+            return 0; // Decay to dead
+        }
+        else { // Dead (0)
+            if (this.evaluateRule(this.birthRules, outerAliveSum, outerNetherSum))
+                return 1;
+            return 0;
         }
     }
 }
@@ -374,22 +407,30 @@ export class GameOfLife extends OuterTotalisticCellularAutomaton {
  * The structural neighborhood vectors vary mathematically based on row parity (y % 2).
  */
 export class HexagonalGameOfLife extends OuterTotalisticCellularAutomaton {
+    neighborhoodType;
+    survivalRules;
+    birthRules;
+    netherRules;
     /**
      * @param survival Array of neighbor counts required to survive (default [3, 4])
      * @param birth Array of neighbor counts required to be born (default [2])
      */
-    constructor(survival = [3, 4], birth = [2], frequencyDomain = 0, neighborhoodType = 'vonNeumann') {
+    constructor(survival = [3, 4], birth = [2], nether = null, frequencyDomain = 0, neighborhoodType = 'vonNeumann', useNetherstate = false) {
         const states = new Set([0, 1]);
-        if (frequencyDomain > 0) {
+        if (useNetherstate) {
+            states.add(2);
+        }
+        else if (frequencyDomain > 0) {
             for (let i = 2; i <= frequencyDomain; i++) {
                 states.add(i);
             }
         }
         super(2, states, [], // Dynamic evaluation overrides Neighborhood instantiation 
-        0, frequencyDomain);
+        0, frequencyDomain, useNetherstate);
         this.neighborhoodType = neighborhoodType;
-        this.survivalRules = new Set(survival);
-        this.birthRules = new Set(birth);
+        this.survivalRules = Array.isArray(survival) ? new Set(survival) : survival;
+        this.birthRules = Array.isArray(birth) ? new Set(birth) : birth;
+        this.netherRules = nether ? (Array.isArray(nether) ? new Set(nether) : nether) : null;
     }
     getNeighborhoodOffsets(coord) {
         // Hexagonal mapped to "odd-r" Cartesian indices.
@@ -434,12 +475,30 @@ export class HexagonalGameOfLife extends OuterTotalisticCellularAutomaton {
             }
         }
     }
-    evaluateOuterSum(centerState, outerSum) {
-        if (centerState === 1) {
-            return this.survivalRules.has(outerSum) ? 1 : 0;
+    evaluateRule(ruleObj, aliveSum, netherSum) {
+        if (ruleObj instanceof Set) {
+            return ruleObj.has(aliveSum);
         }
         else {
-            return this.birthRules.has(outerSum) ? 1 : 0;
+            return ruleObj.aliveTarget.has(aliveSum) && ruleObj.netherTarget.has(netherSum);
+        }
+    }
+    evaluateOuterSum(centerState, outerAliveSum, outerNetherSum) {
+        if (centerState === 1) { // Alive
+            if (this.evaluateRule(this.survivalRules, outerAliveSum, outerNetherSum))
+                return 1;
+            // Plunge to Nether if flag is on and failed survival
+            return this.useNetherstate ? 2 : 0;
+        }
+        else if (centerState === 2) { // Nether
+            if (this.netherRules && this.evaluateRule(this.netherRules, outerAliveSum, outerNetherSum))
+                return 1; // Resurrect
+            return 0; // Decay to dead
+        }
+        else { // Dead (0)
+            if (this.evaluateRule(this.birthRules, outerAliveSum, outerNetherSum))
+                return 1;
+            return 0;
         }
     }
 }
@@ -449,22 +508,26 @@ export class HexagonalGameOfLife extends OuterTotalisticCellularAutomaton {
  * Orientation is strictly determined by the parity of (x + y).
  */
 export class TriangularGameOfLife extends OuterTotalisticCellularAutomaton {
-    /**
-     * @param survival Array of neighbor counts required to survive (default [1, 2])
-     * @param birth Array of neighbor counts required to be born (default [2])
-     */
-    constructor(survival = [1, 2], birth = [2], frequencyDomain = 0, neighborhoodType = 'vonNeumann') {
+    neighborhoodType;
+    survivalRules;
+    birthRules;
+    netherRules;
+    constructor(survival = [1, 2], birth = [2], nether = null, frequencyDomain = 0, neighborhoodType = 'vonNeumann', useNetherstate = false) {
         const states = new Set([0, 1]);
-        if (frequencyDomain > 0) {
+        if (useNetherstate) {
+            states.add(2);
+        }
+        else if (frequencyDomain > 0) {
             for (let i = 2; i <= frequencyDomain; i++) {
                 states.add(i);
             }
         }
         super(2, states, [], // Dynamic evaluation overrides Neighborhood instantiation 
-        0, frequencyDomain);
+        0, frequencyDomain, useNetherstate);
         this.neighborhoodType = neighborhoodType;
-        this.survivalRules = new Set(survival);
-        this.birthRules = new Set(birth);
+        this.survivalRules = Array.isArray(survival) ? new Set(survival) : survival;
+        this.birthRules = Array.isArray(birth) ? new Set(birth) : birth;
+        this.netherRules = nether ? (Array.isArray(nether) ? new Set(nether) : nether) : null;
     }
     getNeighborhoodOffsets(coord) {
         // (x + y) even = UP Triangle. Shares bottom edge.
@@ -506,12 +569,29 @@ export class TriangularGameOfLife extends OuterTotalisticCellularAutomaton {
             }
         }
     }
-    evaluateOuterSum(centerState, outerSum) {
-        if (centerState === 1) {
-            return this.survivalRules.has(outerSum) ? 1 : 0;
+    evaluateRule(ruleObj, aliveSum, netherSum) {
+        if (ruleObj instanceof Set) {
+            return ruleObj.has(aliveSum);
         }
         else {
-            return this.birthRules.has(outerSum) ? 1 : 0;
+            return ruleObj.aliveTarget.has(aliveSum) && ruleObj.netherTarget.has(netherSum);
+        }
+    }
+    evaluateOuterSum(centerState, outerAliveSum, outerNetherSum) {
+        if (centerState === 1) { // Alive
+            if (this.evaluateRule(this.survivalRules, outerAliveSum, outerNetherSum))
+                return 1;
+            return this.useNetherstate ? 2 : 0;
+        }
+        else if (centerState === 2) { // Nether
+            if (this.netherRules && this.evaluateRule(this.netherRules, outerAliveSum, outerNetherSum))
+                return 1;
+            return 0;
+        }
+        else { // Dead (0)
+            if (this.evaluateRule(this.birthRules, outerAliveSum, outerNetherSum))
+                return 1;
+            return 0;
         }
     }
 }
@@ -522,10 +602,7 @@ export class TriangularGameOfLife extends OuterTotalisticCellularAutomaton {
  * Uses stringified coordinates 'x,y,z' as hash map keys.
  */
 export class SparseConfiguration extends GlobalConfiguration {
-    constructor() {
-        super(...arguments);
-        this.stateMap = new Map();
-    }
+    stateMap = new Map();
     /**
      * Serializes a Coordinate<D> into a unique string key.
      * e.g., [-1, 5] -> "-1,5"
@@ -565,6 +642,10 @@ export class SparseConfiguration extends GlobalConfiguration {
  * Resolves D-dimensional mathematical coordinates into a flattened 1D array computing dimensional strides.
  */
 export class DenseConfiguration extends GlobalConfiguration {
+    dimensions;
+    buffer;
+    strides;
+    totalVolume;
     /**
      * @param dimensions The finite size constraints of the array representation.
      * @param quiescentState The natural vacuum background state.
@@ -614,4 +695,161 @@ export class DenseConfiguration extends GlobalConfiguration {
         const idx = this.getIndex(coord);
         this.buffer[idx] = state;
     }
+}
+/**
+ * Helper to check if two snapshots of active coordinates are identical
+ * up to a pure translation offset (Spaceship / Glider detection).
+ * Properly handles mapping across Toroidal domain boundaries.
+ */
+export function isTranslatedMatch(a, b, wrapX = 64, wrapY = 64) {
+    if (a.length !== b.length || a.length === 0)
+        return false;
+    const bSet = new Set(b.map(pt => `${pt[0]},${pt[1]}`));
+    // Check if it's strictly a static oscillator (no displacement)
+    let isStatic = true;
+    for (const pt of a) {
+        if (!bSet.has(`${pt[0]},${pt[1]}`)) {
+            isStatic = false;
+            break;
+        }
+    }
+    if (isStatic)
+        return false; // Reject static oscillators seamlessly
+    const a0 = a[0];
+    // Assume a0 maps to SOME point exactly in b
+    for (let i = 0; i < b.length; i++) {
+        const b_i = b[i];
+        let dx = (b_i[0] - a0[0]) % wrapX;
+        let dy = (b_i[1] - a0[1]) % wrapY;
+        if (dx < 0)
+            dx += wrapX;
+        if (dy < 0)
+            dy += wrapY;
+        let match = true;
+        for (let j = 1; j < a.length; j++) {
+            let mappedX = (a[j][0] + dx) % wrapX;
+            let mappedY = (a[j][1] + dy) % wrapY;
+            if (!bSet.has(`${mappedX},${mappedY}`)) {
+                match = false;
+                break;
+            }
+        }
+        if (match)
+            return true;
+    }
+    return false;
+}
+export function getTranslationInvariantHash(coords, wrapX = 64, wrapY = 64) {
+    if (coords.length === 0)
+        return "empty";
+    let bestHash = "";
+    // To be truly translation invariant on a torus, we cannot rely on absolute sorting for the anchor,
+    // because absolute sorting changes depending on where the shape straddles the boundary wrapper.
+    // Instead, we try EVERY point as the anchor, generate its relative shape hash, and return the lexicographically smallest one.
+    for (const anchor of coords) {
+        const relativeCoords = coords.map(pt => {
+            let dx = (pt[0] - anchor[0]) % wrapX;
+            let dy = (pt[1] - anchor[1]) % wrapY;
+            if (dx < 0)
+                dx += wrapX;
+            if (dy < 0)
+                dy += wrapY;
+            if (dx > wrapX / 2)
+                dx -= wrapX;
+            if (dy > wrapY / 2)
+                dy -= wrapY;
+            return [dx, dy];
+        });
+        relativeCoords.sort((a, b) => a[0] !== b[0] ? a[0] - b[0] : a[1] - b[1]);
+        const hash = relativeCoords.map(pt => `${pt[0]},${pt[1]}`).join('|');
+        if (bestHash === "" || hash < bestHash) {
+            bestHash = hash;
+        }
+    }
+    return bestHash;
+}
+/**
+ * Lars-Compatible Spaceship Searcher
+ * Explores small random clusters for translation symmetry over time natively.
+ */
+export async function findHexGlider(engine, maxGens = 100, globalEdges, knownCycles, skippedRef) {
+    const domain = new ToroidalDomain([100, 100]);
+    let currentConfig = new SparseConfiguration(0);
+    // 1. Seed a small random "organism" in the center
+    for (let dq = 0; dq < 7; dq++) {
+        for (let dr = 0; dr < 7; dr++) {
+            if (Math.random() < 0.5) {
+                const q = 47 + dq;
+                const r = 47 + dr;
+                currentConfig.setState([q, r], 1);
+            }
+        }
+    }
+    let active = Array.from(currentConfig.getActiveCoordinates());
+    if (active.length === 0)
+        return null;
+    let currentHash = getTranslationInvariantHash(active, 100, 100);
+    const initialSnapshot = active;
+    const pathTracker = new Map();
+    pathTracker.set(currentHash, 0);
+    const stateHistory = [active];
+    const hashHistory = [currentHash];
+    // 2. Evolve and check for translation iteratively
+    for (let g = 1; g <= maxGens; g++) {
+        let nextConfig = new SparseConfiguration(0);
+        engine.evolve(currentConfig, currentConfig.getActiveCoordinates(), nextConfig, domain, g);
+        currentConfig = nextConfig;
+        const nextActive = Array.from(currentConfig.getActiveCoordinates());
+        if (nextActive.length === 0) {
+            if (globalEdges)
+                globalEdges.set(currentHash, "empty");
+            return null; // Organism Death
+        }
+        const nextHash = getTranslationInvariantHash(nextActive, 100, 100);
+        if (globalEdges)
+            globalEdges.set(currentHash, nextHash);
+        if (pathTracker.has(nextHash)) {
+            // We hit a cycle!
+            const cycleStartIndex = pathTracker.get(nextHash);
+            const cycleHashes = hashHistory.slice(cycleStartIndex);
+            const canonicalCycleId = [...cycleHashes].sort().join('->');
+            if (knownCycles && !knownCycles.has(canonicalCycleId)) {
+                knownCycles.add(canonicalCycleId);
+                if (cycleHashes.length === 3) {
+                    const startStateRaw = stateHistory[cycleStartIndex];
+                    const endStateRaw = nextActive;
+                    const isTranslated = isTranslatedMatch(startStateRaw, endStateRaw, 100, 100) && !isStrictMatch(startStateRaw, endStateRaw);
+                    console.log(`\n\n[!!!] NEW PERIOD 3 CYCLE FOUND! Type: ${isTranslated ? 'GLIDER' : 'OSCILLATOR'}`);
+                    console.log(`Hashes in cycle:`, cycleHashes);
+                    console.log(`Canonical ID:`, canonicalCycleId);
+                    // Return the canonical start of the cycle
+                    return stateHistory[cycleStartIndex];
+                }
+            }
+            return null; // Stop exploring this path
+        }
+        if (globalEdges && globalEdges.has(nextHash)) {
+            if (skippedRef)
+                skippedRef.count++;
+            return null; // Path merges into a known graph
+        }
+        // Continue evolution
+        currentHash = nextHash;
+        pathTracker.set(currentHash, g);
+        stateHistory.push(nextActive);
+        hashHistory.push(currentHash);
+        // 3. Topology Check: Compare current bounding box to initial
+        // If shape is identical but coordinates shifted, we formally found a Glider.
+        if (isTranslatedMatch(initialSnapshot, nextActive)) {
+            console.log(`Glider found natively at generation ${g}!`);
+            return nextActive;
+        }
+    }
+    return null;
+}
+function isStrictMatch(a, b) {
+    if (a.length !== b.length)
+        return false;
+    const bSet = new Set(b.map(pt => `${pt[0]},${pt[1]}`));
+    return a.every(pt => bSet.has(`${pt[0]},${pt[1]}`));
 }

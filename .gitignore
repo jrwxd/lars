@@ -1,0 +1,17 @@
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Build Output
+dist/
+public/dist/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# OS Files
+.DS_Store
+Thumbs.db
