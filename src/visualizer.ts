@@ -1135,13 +1135,6 @@ if (typeof window !== 'undefined') {
             isPaused = !isPaused;
             updatePlayButton();
         });
-        document.getElementById('rerollAnnihilationBtn')?.addEventListener('click', () => {
-            const seed = `annihilation-of-joy-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
-            (document.getElementById('seedInput') as HTMLInputElement).value = seed;
-            (document.getElementById('introSeedInput') as HTMLInputElement).value = seed;
-            initializeSimulation();
-            startTorusMusic();
-        });
         document.getElementById('toggleMusicBtn')?.addEventListener('click', () => {
             document.getElementById('music-controls')?.classList.toggle('hidden');
         });
@@ -1277,94 +1270,5 @@ if (typeof window !== 'undefined') {
             startSimulation();
         });
 
-        document.getElementById('presetAnnihilationBtn')?.addEventListener('click', () => {
-            const setValue = (id: string, value: string) => {
-                const element = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
-                if (element) element.value = value;
-            };
-
-            setValue('seedInput', 'annihilation-of-joy');
-            setValue('configType', 'dense');
-            setValue('topologyType', 'square');
-            setValue('neighborhoodType', 'moore');
-            setValue('domainType', 'toroidal');
-            setValue('gridWidth', '24');
-            setValue('gridHeight', '12');
-            setValue('survivalRules', '23');
-            setValue('birthRules', '3');
-            setValue('netherRules', '2');
-            setValue('frequencyDomain', '0');
-            setValue('colorStrategy', 'monochrome');
-            (document.getElementById('useNetherstate') as HTMLInputElement).checked = true;
-
-            setValue('musicScale', 'minor');
-            setValue('musicTuning', 'just');
-            setValue('musicRoot', '110');
-            setValue('musicAttack', '40');
-            setValue('musicResonance', '4');
-            setValue('musicDecay', '600');
-            setValue('musicFilter', '900');
-            setValue('musicFilterType', 'bandpass');
-            setValue('musicWaveform', 'sawtooth');
-            setValue('musicTempo', '54');
-            setValue('musicRhythm', '5:4');
-            setValue('musicVolume', '0.65');
-            setValue('musicGate', '95');
-            setValue('musicSpread', '0.8');
-            setValue('musicPolyphony', 'full');
-            setValue('musicMaxVoices', '12');
-            setValue('musicStateMode', 'harmonic');
-
-            const netherGroup = document.getElementById('netherRulesGroup');
-            if (netherGroup) netherGroup.style.display = 'flex';
-            (document.getElementById('introSeedInput') as HTMLInputElement).value = 'annihilation-of-joy';
-            startSimulation();
-            startTorusMusic();
-        });
-
-        document.getElementById('presetScenicBtn')?.addEventListener('click', () => {
-            const setValue = (id: string, value: string) => {
-                const element = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
-                if (element) element.value = value;
-            };
-
-            setValue('seedInput', 'scenic-world-study');
-            setValue('configType', 'dense');
-            setValue('topologyType', 'square');
-            setValue('neighborhoodType', 'moore');
-            setValue('domainType', 'toroidal');
-            setValue('gridWidth', '24');
-            setValue('gridHeight', '12');
-            setValue('survivalRules', '23');
-            setValue('birthRules', '3');
-            setValue('frequencyDomain', '0');
-            setValue('colorStrategy', 'cyclical');
-            (document.getElementById('useNetherstate') as HTMLInputElement).checked = false;
-
-            setValue('musicScale', 'minor');
-            setValue('musicProgression', 'bittersweet');
-            setValue('musicTuning', 'equal');
-            setValue('musicRoot', '146.83');
-            setValue('musicAttack', '55');
-            setValue('musicResonance', '1.2');
-            setValue('musicDecay', '420');
-            setValue('musicFilter', '2400');
-            setValue('musicFilterType', 'lowpass');
-            setValue('musicWaveform', 'triangle');
-            setValue('musicTempo', '84');
-            setValue('musicRhythm', '3:2');
-            setValue('musicVolume', '0.58');
-            setValue('musicGate', '88');
-            setValue('musicSpread', '0.55');
-            setValue('musicPolyphony', 'four');
-            setValue('musicMaxVoices', '6');
-            setValue('musicStateMode', 'harmonic');
-
-            const netherGroup = document.getElementById('netherRulesGroup');
-            if (netherGroup) netherGroup.style.display = 'none';
-            (document.getElementById('introSeedInput') as HTMLInputElement).value = 'scenic-world-study';
-            startSimulation();
-            startTorusMusic();
-        });
     };
 }
