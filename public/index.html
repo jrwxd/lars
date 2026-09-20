@@ -199,6 +199,71 @@
             visibility: hidden;
             pointer-events: none;
         }
+
+        #music-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+        }
+
+        #music-controls {
+            margin-top: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            background: rgba(17, 17, 17, 0.9);
+            backdrop-filter: blur(5px);
+            padding: 16px;
+            border-radius: 8px;
+            border: 1px solid #333;
+            min-width: 230px;
+        }
+
+        #music-controls.hidden {
+            display: none;
+        }
+
+        #music-controls .control-group {
+            gap: 10px;
+        }
+
+        #music-controls input,
+        #music-controls select {
+            width: 105px;
+            box-sizing: border-box;
+        }
+
+        #transcription-panel {
+            margin-top: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            background: rgba(17, 17, 17, 0.9);
+            backdrop-filter: blur(5px);
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #333;
+            width: min(430px, calc(100vw - 40px));
+            box-sizing: border-box;
+        }
+
+        #transcription-panel.hidden {
+            display: none;
+        }
+
+        #lilypondOutput {
+            width: 100%;
+            height: 180px;
+            box-sizing: border-box;
+            resize: vertical;
+            background: #080808;
+            color: #b8ffb8;
+            border: 1px solid #333;
+            border-radius: 4px;
+            font: 11px/1.35 monospace;
+            padding: 8px;
+        }
     </style>
     <script type="importmap">
         {
@@ -220,6 +285,8 @@
         <div class="presets">
             <button id="presetRandomBtn">RANDOM CHAOS</button>
             <button id="presetOscillatorBtn">HEX OSCILLATOR</button>
+            <button id="presetAnnihilationBtn">ANNIHILATION OF JOY</button>
+            <button id="presetScenicBtn">SCENIC WORLD STUDY</button>
         </div>
     </div>
 
@@ -326,8 +393,166 @@
                 <button id="exportStateBtn" title="Export current generation to Seed box">Export State</button>
             </div>
 
+            <div class="control-group">
+                <label for="playTorusBtn">Torus Music</label>
+                <button id="playTorusBtn" title="Play the equatorial ring from left to right">Play Ring</button>
+            </div>
+            <div id="torusPlaybackStatus" style="font-size: 12px; color: #0f0; min-height: 16px;"></div>
+            <div id="transcription-panel" class="hidden">
+                <label for="lilypondOutput">LilyPond transcription</label>
+                <textarea id="lilypondOutput" readonly spellcheck="false"
+                    aria-label="Generated LilyPond sheet music transcription"></textarea>
+                <button id="downloadLilypondBtn" type="button">Download .ly</button>
+                <button id="renderLilypondBtn" type="button">Render PDF + MIDI</button>
+            </div>
+
+            <button id="togglePlayBtn">Pause Evolution</button>
+            <button id="rerollAnnihilationBtn">Reroll Annihilation</button>
             <button id="resetBtn">Restart Ecosystem</button>
             <button id="randomRuleBtn">Random Rule</button>
+        </div>
+    </div>
+
+    <div id="music-layer">
+        <button id="toggleMusicBtn">♪ Music</button>
+        <div id="music-controls" class="hidden">
+            <div class="control-group">
+                <label for="musicScale">Scale</label>
+                <select id="musicScale">
+                    <option value="nTet">n-TET</option>
+                    <option value="chromatic">Chromatic</option>
+                    <option value="major">Major</option>
+                    <option value="minor">Natural Minor</option>
+                    <option value="pentatonic">Pentatonic</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="musicProgression">Harmony</label>
+                <select id="musicProgression">
+                    <option value="static">Static Center</option>
+                    <option value="bittersweet">Bittersweet Cycle</option>
+                    <option value="modal">Modal Drift</option>
+                    <option value="descending">Descending Cycle</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="musicTuning">Tuning</label>
+                <select id="musicTuning">
+                    <option value="equal">Equal</option>
+                    <option value="just">Just Intonation</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="musicRoot">Root (Hz)</label>
+                <input id="musicRoot" type="number" value="261.63" min="20" max="2000" step="0.01">
+            </div>
+            <div class="control-group">
+                <label for="musicAttack">Attack (ms)</label>
+                <input id="musicAttack" type="number" value="10" min="1" max="500" step="1">
+            </div>
+            <div class="control-group">
+                <label for="musicResonance">Resonance</label>
+                <input id="musicResonance" type="number" value="0.7" min="0.1" max="30" step="0.1">
+            </div>
+            <div class="control-group">
+                <label for="musicDecay">Decay (ms)</label>
+                <input id="musicDecay" type="number" value="140" min="10" max="1000" step="1">
+            </div>
+            <div class="control-group">
+                <label for="musicFilter">Filter (Hz)</label>
+                <input id="musicFilter" type="number" value="4000" min="100" max="20000" step="100">
+            </div>
+            <div class="control-group">
+                <label for="musicFilterType">Filter Type</label>
+                <select id="musicFilterType">
+                <option value="lowpass">Low-pass</option>
+                <option value="bandpass">Band-pass</option>
+                <option value="highpass">High-pass</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="musicWaveform">Waveform</label>
+                <select id="musicWaveform">
+                <option value="sine">Sine</option>
+                <option value="triangle">Triangle</option>
+                <option value="sawtooth">Sawtooth</option>
+                <option value="square">Square</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="musicTempo">Tempo (BPM)</label>
+                <input id="musicTempo" type="number" value="120" min="40" max="300" step="1">
+            </div>
+            <div class="control-group">
+                <label for="musicRhythm">Polyrhythm</label>
+                <select id="musicRhythm">
+                    <option value="1:1">1 : 1</option>
+                    <option value="2:3">2 : 3</option>
+                    <option value="3:2">3 : 2</option>
+                    <option value="3:4">3 : 4</option>
+                    <option value="4:3">4 : 3</option>
+                    <option value="4:5">4 : 5</option>
+                    <option value="5:4">5 : 4</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="musicVolume">Volume</label>
+                <input id="musicVolume" type="number" value="0.7" min="0" max="1" step="0.05">
+            </div>
+            <div class="control-group">
+                <label for="musicGate">Gate (%)</label>
+                <input id="musicGate" type="number" value="80" min="10" max="100" step="1">
+            </div>
+            <div class="control-group">
+                <label for="musicSpread">Stereo Spread</label>
+                <input id="musicSpread" type="number" value="0.35" min="0" max="1" step="0.05">
+            </div>
+            <div class="control-group">
+                <label for="musicPolyphony">Voicing</label>
+                <select id="musicPolyphony">
+                    <option value="full">Full Ring</option>
+                    <option value="four">Four-Voice</option>
+                    <option value="drop2">Drop-2</option>
+                    <option value="state">State Priority</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="musicMaxVoices">Max Voices</label>
+                <input id="musicMaxVoices" type="number" value="8" min="1" max="32" step="1">
+            </div>
+            <div class="control-group">
+                <label for="musicStateMode">State Semantics</label>
+                <select id="musicStateMode">
+                    <option value="harmonic">Harmonic Roles</option>
+                    <option value="energy">Energy / Register</option>
+                    <option value="melodic">Melodic Transpose</option>
+                    <option value="texture">Timbral Texture</option>
+                    <option value="spectral">Spectral Partials</option>
+                    <option value="percussive">Percussive Density</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="musicStateInfluence">State Influence</label>
+                <input id="musicStateInfluence" type="number" value="1" min="0" max="4" step="0.05">
+            </div>
+            <div class="control-group">
+                <label for="musicStatePitchStep">Pitch Step (semitones)</label>
+                <input id="musicStatePitchStep" type="number" value="1" min="0" max="24" step="0.1">
+            </div>
+            <div class="control-group">
+                <label for="musicEngravingStyle">Engraving Style</label>
+                <select id="musicEngravingStyle">
+                    <option value="cage">Post-Ironic Cage</option>
+                    <option value="clean">Conventional</option>
+                </select>
+            </div>
+            <div style="font-size: 11px; color: #888; line-height: 1.35;">
+                0 = rest. Higher CA states can become harmonics, register shifts,
+                melodic transpositions, spectral partials, timbral changes, or
+                percussive density. State Influence and Pitch Step control how
+                strongly those meanings respond to higher states. Post-Ironic Cage
+                uses state weight to deform noteheads, stems, dynamics, and labels.
+            </div>
         </div>
     </div>
 

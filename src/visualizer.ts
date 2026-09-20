@@ -6,8 +6,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 const CANVAS_SIZE = 800; // Physical pixels
 let GRID_WIDTH = 100;
 let GRID_HEIGHT = 100;
-let CELL_WIDTH = Math.floor(CANVAS_SIZE / GRID_WIDTH);
-let CELL_HEIGHT = Math.floor(CANVAS_SIZE / GRID_HEIGHT);
+let CELL_WIDTH = CANVAS_SIZE / GRID_WIDTH;
+let CELL_HEIGHT = CANVAS_SIZE / GRID_HEIGHT;
 const FPS = 15;
 let isPaused = false;
 let globalGeneration = 0;
@@ -90,6 +90,30 @@ let renderer: THREE.WebGLRenderer | null = null;
 let controls: OrbitControls | null = null;
 let mesh: THREE.Mesh | null = null;
 let texture: THREE.CanvasTexture | null = null;
+let audioContext: AudioContext | null = null;
+let torusPlaybackTimeout: number | null = null;
+let torusPlaybackRings: Array<Array<{ x: number; y: number; state: number }>> = [];
+let torusPlaybackIndex = -1;
+let torusSecondaryPlaybackIndex = -1;
+let torusRhythmTick = 0;
+let torusPrimaryPulseCount = 0;
+let latestLilypondTranscription = '';
+
+const TORUS_ROOT_FREQUENCY = 261.625565; // C4: a fixed, deterministic root
+const TORUS_STEP_MS = 180;
+const MUSIC_SCALES: Record<string, number[]> = {
+    chromatic: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+    major: [0, 2, 4, 5, 7, 9, 11],
+    minor: [0, 2, 3, 5, 7, 8, 10],
+    pentatonic: [0, 2, 4, 7, 9]
+};
+const JUST_RATIOS = [1, 16 / 15, 9 / 8, 6 / 5, 5 / 4, 4 / 3, 45 / 32, 3 / 2, 8 / 5, 5 / 3, 9 / 5, 15 / 8];
+const TORUS_PROGRESSIONS: Record<string, number[]> = {
+    static: [0],
+    bittersweet: [0, -3, 3, -2],
+    modal: [0, 2, -1, 5, 3],
+    descending: [0, -2, -4, -7]
+};
 
 function updateGeometry(domainType: string) {
     if (!mesh || !scene) return;
@@ -193,6 +217,7 @@ function seedEcosystem() {
 }
 
 export function initializeSimulation() {
+    stopTorusMusic();
     globalGeneration = 0; // Reset temporal state
     const configType = (document.getElementById('configType') as HTMLSelectElement).value;
     const domainType = (document.getElementById('domainType') as HTMLSelectElement).value;
@@ -289,6 +314,9 @@ export function initializeSimulation() {
         CELL_HEIGHT = CANVAS_SIZE / GRID_HEIGHT;
     } else if (topologyType === 'hexagonal') {
         CELL_WIDTH = CANVAS_SIZE / (GRID_WIDTH + 0.5);
+        CELL_HEIGHT = CANVAS_SIZE / GRID_HEIGHT;
+    } else {
+        CELL_WIDTH = CANVAS_SIZE / GRID_WIDTH;
         CELL_HEIGHT = CANVAS_SIZE / GRID_HEIGHT;
     }
 
@@ -405,7 +433,11 @@ export function draw() {
             ctx.closePath();
             ctx.fill();
         } else {
-            ctx.fillRect(x * CELL_WIDTH, y * CELL_HEIGHT, Math.ceil(CELL_WIDTH), Math.ceil(CELL_HEIGHT));
+            const left = Math.floor(x * CELL_WIDTH);
+            const top = Math.floor(y * CELL_HEIGHT);
+            const right = Math.ceil((x + 1) * CELL_WIDTH);
+            const bottom = Math.ceil((y + 1) * CELL_HEIGHT);
+            ctx.fillRect(left, top, right - left, bottom - top);
         }
     };
 
@@ -425,6 +457,24 @@ export function draw() {
             const state = currentConfig.getState(coord);
             if (state !== 0) {
                 drawCell(coord[0], coord[1], state);
+            }
+        }
+    }
+
+    const playbackRing = torusPlaybackRings[torusPlaybackIndex];
+    const secondaryPlaybackRing = torusPlaybackRings[torusSecondaryPlaybackIndex];
+    if (ctx) {
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        for (const ring of [playbackRing, secondaryPlaybackRing]) {
+            if (!ring) continue;
+            for (const cell of ring) {
+                ctx.strokeRect(
+                    cell.x * CELL_WIDTH + 1,
+                    cell.y * CELL_HEIGHT + 1,
+                    Math.max(1, CELL_WIDTH - 2),
+                    Math.max(1, CELL_HEIGHT - 2)
+                );
             }
         }
     }
@@ -454,6 +504,591 @@ export function update() {
             nextConfig.setState(coord, ca.quiescentState);
         }
     }
+}
+
+function setTorusPlaybackStatus(message: string) {
+    const status = document.getElementById('torusPlaybackStatus');
+    if (status) status.textContent = message;
+}
+
+function updatePlayButton() {
+    const button = document.getElementById('togglePlayBtn');
+    if (button) {
+        button.textContent = isPaused ? 'Play Evolution' : 'Pause Evolution';
+        button.setAttribute('aria-label', isPaused ? 'Play cellular automaton evolution' : 'Pause cellular automaton evolution');
+    }
+}
+
+function getMusicNumber(id: string, fallback: number, minimum: number, maximum: number): number {
+    const value = Number((document.getElementById(id) as HTMLInputElement | null)?.value);
+    return Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, value)) : fallback;
+}
+
+function getTorusFrequency(cellPosition: number, ringIndex = 0): number {
+    const scale = (document.getElementById('musicScale') as HTMLSelectElement | null)?.value || 'nTet';
+    const tuning = (document.getElementById('musicTuning') as HTMLSelectElement | null)?.value || 'equal';
+    const progression = (document.getElementById('musicProgression') as HTMLSelectElement | null)?.value || 'static';
+    const root = getMusicNumber('musicRoot', TORUS_ROOT_FREQUENCY, 20, 2000);
+    const rawSemitones = (cellPosition / GRID_WIDTH) * 12;
+    let semitones = rawSemitones;
+
+    if (scale !== 'nTet') {
+        const intervals = MUSIC_SCALES[scale] || MUSIC_SCALES.chromatic;
+        const octave = Math.floor(rawSemitones / 12);
+        const semitoneInOctave = rawSemitones - octave * 12;
+        const nearestInterval = intervals.reduce((nearest, interval) =>
+            Math.abs(interval - semitoneInOctave) < Math.abs(nearest - semitoneInOctave) ? interval : nearest
+        );
+        semitones = octave * 12 + nearestInterval;
+    }
+
+    if (tuning === 'just' && scale !== 'nTet') {
+        const octave = Math.floor(semitones / 12);
+        const pitchClass = Math.round(semitones - octave * 12);
+        const ratio = JUST_RATIOS[Math.min(11, Math.max(0, pitchClass))] || 2;
+        return root * Math.pow(2, octave) * ratio;
+    }
+
+    const progressionOffsets = TORUS_PROGRESSIONS[progression] || TORUS_PROGRESSIONS.static;
+    const progressionOffset = progressionOffsets[Math.floor(ringIndex / 4) % progressionOffsets.length];
+    return root * Math.pow(2, (semitones + progressionOffset) / 12);
+}
+
+function getTorusStepMs(): number {
+    const tempo = getMusicNumber('musicTempo', 120, 40, 300);
+    return 30000 / tempo;
+}
+
+function getPolyrhythm(): [number, number] {
+    const value = (document.getElementById('musicRhythm') as HTMLSelectElement | null)?.value || '1:1';
+    const [primary, secondary] = value.split(':').map(Number);
+    return [
+        Number.isFinite(primary) && primary > 0 ? primary : 1,
+        Number.isFinite(secondary) && secondary > 0 ? secondary : 1
+    ];
+}
+
+function greatestCommonDivisor(a: number, b: number): number {
+    while (b !== 0) {
+        const remainder = a % b;
+        a = b;
+        b = remainder;
+    }
+    return a;
+}
+
+function leastCommonMultiple(a: number, b: number): number {
+    return Math.abs(a * b) / greatestCommonDivisor(a, b);
+}
+
+function getStateVoice(state: number, cellPosition: number) {
+    const mode = (document.getElementById('musicStateMode') as HTMLSelectElement | null)?.value || 'harmonic';
+    const stateInfluence = getMusicNumber('musicStateInfluence', 1, 0, 4);
+    const statePitchStep = getMusicNumber('musicStatePitchStep', 1, 0, 24);
+    const stateLevel = Math.min(12, Math.max(0, state - 1));
+    const voice = {
+        frequency: getTorusFrequency(cellPosition),
+        level: 1,
+        decayMultiplier: 1,
+        waveform: ((document.getElementById('musicWaveform') as HTMLSelectElement | null)?.value || 'sine') as OscillatorType
+    };
+
+    if (mode === 'harmonic') {
+        if (state === 2) {
+            voice.frequency *= 1 + 0.5 * stateInfluence;
+            voice.waveform = 'triangle';
+            voice.level = 0.9 - 0.15 * stateInfluence;
+        } else if (state > 2) {
+            const partial = 1 + stateLevel * stateInfluence;
+            voice.frequency *= partial;
+            voice.level = 1 / Math.sqrt(partial);
+        }
+    } else if (mode === 'energy') {
+        voice.frequency *= Math.pow(2, Math.min(3, stateLevel * stateInfluence / 3));
+        voice.level = 0.55 + stateLevel * 0.06 * stateInfluence;
+        voice.decayMultiplier = 1 + stateLevel * 0.08 * stateInfluence;
+    } else if (mode === 'melodic') {
+        voice.frequency *= Math.pow(2, stateLevel * statePitchStep * stateInfluence / 12);
+        voice.level = 0.8 + stateLevel * 0.04 * stateInfluence;
+    } else if (mode === 'texture') {
+        const textures: OscillatorType[] = ['sine', 'triangle', 'sawtooth', 'square'];
+        voice.waveform = textures[Math.floor(stateLevel * stateInfluence) % textures.length];
+        voice.frequency *= 1 + (Math.floor(stateLevel * stateInfluence) % 5) * 0.01;
+        voice.level = 0.8;
+        voice.decayMultiplier = 1;
+    } else if (mode === 'spectral') {
+        const partial = Math.max(1, 1 + stateLevel * stateInfluence);
+        voice.frequency *= partial;
+        voice.waveform = state % 2 === 0 ? 'triangle' : 'sine';
+        voice.level = 1 / Math.sqrt(partial);
+        voice.decayMultiplier = 0.8 + Math.min(2, partial / 4);
+    } else {
+        const density = Math.min(1, stateLevel * stateInfluence / 8);
+        voice.frequency *= Math.pow(2, stateLevel * statePitchStep * stateInfluence / 24);
+        voice.waveform = state % 2 === 0 ? 'square' : 'sawtooth';
+        voice.level = 0.65 + density * 0.35;
+        voice.decayMultiplier = Math.max(0.15, 1 - density * 0.8);
+    }
+
+    return voice;
+}
+
+function selectRingVoices(ring: Array<{ x: number; y: number; state: number }>) {
+    const activeCells = ring.filter(cell => cell.state > 0);
+    const mode = (document.getElementById('musicPolyphony') as HTMLSelectElement | null)?.value || 'full';
+    const maxVoices = Math.floor(getMusicNumber('musicMaxVoices', 8, 1, 32));
+
+    if (mode === 'full' || activeCells.length <= maxVoices) {
+        return activeCells.map(cell => ({ cell, octaveOffset: 0 }));
+    }
+
+    if (mode === 'state') {
+        return [...activeCells]
+            .sort((left, right) => right.state - left.state || left.y - right.y)
+            .slice(0, maxVoices)
+            .map(cell => ({ cell, octaveOffset: 0 }));
+    }
+
+    const ordered = [...activeCells].sort((left, right) => left.y - right.y);
+    const selected = mode === 'four'
+        ? Array.from({ length: maxVoices }, (_, index) =>
+            ordered[Math.floor(index * ordered.length / maxVoices)]
+        ).filter((cell, index, cells) => cell && cells.indexOf(cell) === index)
+        : ordered.slice(0, maxVoices);
+
+    return selected.map((cell, index) => ({
+        cell,
+        octaveOffset: mode === 'drop2' && index === 1 ? -1 : 0
+    }));
+}
+
+interface LilypondPitch {
+    notation: string;
+    centsDeviation: number;
+}
+
+function frequencyToLilypondPitch(frequency: number): LilypondPitch {
+    const exactMidi = 69 + 12 * Math.log2(frequency / 440);
+    const quarterToneMidi = Math.min(108, Math.max(24, Math.round(exactMidi * 2) / 2));
+    const pitchClasses = ['c', 'cis', 'd', 'dis', 'e', 'f', 'fis', 'g', 'gis', 'a', 'ais', 'b'];
+    const midi = Math.floor(quarterToneMidi);
+    const octave = Math.floor(midi / 12) - 1;
+    const octaveMarks = octave - 3;
+    const marks = octaveMarks >= 0
+        ? "'".repeat(octaveMarks)
+        : ",".repeat(-octaveMarks);
+    const quarterToneSuffix = quarterToneMidi % 1 === 0 ? '' : 'ih';
+    return {
+        notation: `${pitchClasses[midi % 12]}${quarterToneSuffix}${marks}`,
+        centsDeviation: Math.round((exactMidi - quarterToneMidi) * 100)
+    };
+}
+
+function formatCentsDeviation(centsDeviation: number): string {
+    return `${centsDeviation >= 0 ? '+' : ''}${centsDeviation}c`;
+}
+
+function getEngravingStyle(): 'clean' | 'cage' {
+    return ((document.getElementById('musicEngravingStyle') as HTMLSelectElement | null)?.value || 'cage') as 'clean' | 'cage';
+}
+
+function generateLilypondRingToken(
+    ring: Array<{ x: number; y: number; state: number }>
+): string {
+    const engravingStyle = getEngravingStyle();
+    const voices = selectRingVoices(ring);
+    if (voices.length === 0) return 'r8';
+
+    const pitchDetails = voices
+        .map(({ cell, octaveOffset }) => {
+            const voice = getStateVoice(cell.state, cell.y);
+            return frequencyToLilypondPitch(voice.frequency * Math.pow(2, octaveOffset));
+        })
+        .filter((pitch, index, allPitches) =>
+            allPitches.findIndex(candidate => candidate.notation === pitch.notation) === index
+        )
+        .sort((left, right) => left.notation.localeCompare(right.notation));
+
+    const pitches = pitchDetails.map(pitch => pitch.notation);
+    const cents = pitchDetails
+        .map(pitch => pitch.centsDeviation)
+        .filter(centsDeviation => Math.abs(centsDeviation) >= 10)
+        .map(formatCentsDeviation);
+    const microtonalMarkup = cents.length > 0
+        ? `^\\markup { \\tiny "${cents.join(' ')}" }`
+        : '';
+
+    if (engravingStyle === 'clean') {
+        return pitches.length === 1
+            ? `${pitches[0]}8${microtonalMarkup}`
+            : `<${pitches.join(' ')}>8${microtonalMarkup}`;
+    }
+
+    const activeStates = ring.filter(cell => cell.state > 0).map(cell => cell.state);
+    const weight = activeStates.reduce((total, state) => total + state, 0);
+    const maximumState = Math.max(...activeStates, 1);
+    const noteheadStyles = ['default', 'cross', 'diamond', 'triangle', 'xcircle'];
+    const noteheadStyle = noteheadStyles[Math.min(noteheadStyles.length - 1, maximumState % noteheadStyles.length)];
+    const fontSize = Math.min(5, Math.max(-2, Math.round(weight / Math.max(1, activeStates.length)) - 1));
+    const stemLength = 2 + Math.min(8, weight);
+    const dynamics = ['pppp', 'ppp', 'pp', 'mp', 'mf', 'f', 'ff', 'fff'];
+    const dynamic = dynamics[Math.min(dynamics.length - 1, weight)];
+    const weightMarkup = `^\\markup { \\tiny \\box "W${weight}" }`;
+    const stylePrefix = [
+        `\\once \\override NoteHead.style = #'${noteheadStyle}`,
+        `\\once \\override NoteHead.font-size = #${fontSize}`,
+        `\\once \\override Stem.length = #${stemLength}`
+    ].join(' ');
+    const note = pitches.length === 1
+        ? `${pitches[0]}8${microtonalMarkup}${weightMarkup}\\${dynamic}`
+        : `<${pitches.join(' ')}>8${microtonalMarkup}${weightMarkup}\\${dynamic}`;
+    return `${stylePrefix} ${note}`;
+}
+
+function generateLilypondVoice(
+    rings: Array<Array<{ x: number; y: number; state: number }>>,
+    pulses: number,
+    cycleLength: number,
+    initialRest = false
+): string {
+    const engravingStyle = getEngravingStyle();
+    const tokens = rings.map(generateLilypondRingToken);
+    const scale = `${pulses}/${cycleLength}`;
+    const groups: string[] = [];
+    if (initialRest) {
+        groups.push(`\\scaleDurations ${scale} { r8 }`);
+    }
+    for (let index = 0; index < tokens.length; index += 8) {
+        const ringGroup = rings.slice(index, index + 8);
+        const groupWeight = ringGroup.reduce(
+            (total, ring) => total + ring.reduce((ringTotal, cell) => ringTotal + Math.max(0, cell.state), 0),
+            0
+        );
+        const groupMaximum = ringGroup.reduce(
+            (maximum, ring) => Math.max(maximum, ...ring.map(cell => cell.state)),
+            0
+        );
+        const directive = [
+            'WEIGHT IS A LIE',
+            'DO NOT RESOLVE',
+            'LISTEN SIDEWAYS',
+            'THE REST IS LOUD',
+            'COUNT WRONG',
+            'PREPARE THE ABSENCE',
+            'THIS IS NOT A THEME',
+            'DENSITY DENIES'
+        ][(index / 8 + groupWeight + groupMaximum) % 8];
+        const marginalia = engravingStyle === 'cage'
+            ? `\\mark \\markup { \\box \\column { \\tiny "${directive}" \\tiny "W${groupWeight} / MAX${groupMaximum}" } } `
+            : '';
+        groups.push(`${marginalia}\\scaleDurations ${scale} { ${tokens.slice(index, index + 8).join(' ')} }`);
+    }
+    return groups.join('\n      \\bar "||"\n      ');
+}
+
+    function generateLilypondTranscription(rings: Array<Array<{ x: number; y: number; state: number }>>): string {
+        const tempo = Math.round(getMusicNumber('musicTempo', 120, 40, 300));
+        const scale = (document.getElementById('musicScale') as HTMLSelectElement | null)?.value || 'nTet';
+        const tuning = (document.getElementById('musicTuning') as HTMLSelectElement | null)?.value || 'equal';
+        const rhythm = (document.getElementById('musicRhythm') as HTMLSelectElement | null)?.value || '1:1';
+        const engravingStyle = getEngravingStyle();
+        const [primaryPulses, secondaryPulses] = getPolyrhythm();
+        const cycleLength = leastCommonMultiple(primaryPulses, secondaryPulses);
+        const primaryVoice = generateLilypondVoice(rings, primaryPulses, cycleLength);
+        const secondaryVoice = generateLilypondVoice(
+            rings,
+            secondaryPulses,
+            cycleLength,
+            primaryPulses !== secondaryPulses
+        );
+
+        return `% Generated by LARS from the selected toroidal ring
+    % Scale: ${scale}; tuning: ${tuning}; playback polyrhythm: ${rhythm}; engraving: ${engravingStyle}
+    % Each ring is a note or chord. Empty rings are rests.
+    % Scale-duration blocks encode the exact pulse durations for the selected polyrhythm.
+    % The secondary staff includes the same initial phase offset as Web Audio playback.
+    % Quarter-tone suffixes encode the nearest 50-cent pitch; labels show deviations
+    % of at least 10 cents from that written pitch.
+    \\version "2.24.0"
+    \\language "nederlands"
+
+\\header {
+      title = "${engravingStyle === 'cage' ? 'LARS: Weight Studies for Prepared Toroid' : 'LARS Toroidal Ring'}"
+      subtitle = "${engravingStyle === 'cage' ? 'post-ironic Cage score' : `${rhythm} polyrhythm · ${scale} · ${tuning}`}"
+      composer = "${engravingStyle === 'cage' ? 'The Cellular Automaton' : 'LARS'}"
+      tagline = ##f
+}
+
+\\score {
+  <<
+    \\new Staff \\with { instrumentName = "Primary ${primaryPulses}" } {
+      \\clef treble
+      \\tempo 4 = ${tempo}
+      \\cadenzaOn
+      ${primaryVoice}
+      \\bar "|."
+    }
+${primaryPulses === secondaryPulses ? '' : `    \\new Staff \\with { instrumentName = "Secondary ${secondaryPulses}" } {
+      \\clef treble
+      \\cadenzaOn
+      ${secondaryVoice}
+      \\bar "|."
+    }
+`}
+  >>
+  \\layout {
+    \\context {
+      \\Score
+      \\override BarNumber.break-visibility = ##(#f #f #f)
+    }
+  }
+  \\midi { }
+}
+
+\\paper {
+  indent = 0\\mm
+  ragged-last = ##t
+}
+`;
+}
+
+function showLilypondTranscription(transcription: string) {
+    latestLilypondTranscription = transcription;
+    const output = document.getElementById('lilypondOutput') as HTMLTextAreaElement | null;
+    const panel = document.getElementById('transcription-panel');
+    if (output) output.value = transcription;
+    panel?.classList.remove('hidden');
+}
+
+function downloadLilypondTranscription() {
+    if (!latestLilypondTranscription) return;
+    const blob = new Blob([latestLilypondTranscription], { type: 'text/plain;charset=utf-8' });
+    downloadBlob(blob, `lars-ring-${new Date().toISOString().replace(/[:.]/g, '-')}.ly`);
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+}
+
+function base64ToBlob(base64: string, type: string): Blob {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index++) {
+        bytes[index] = binary.charCodeAt(index);
+    }
+    return new Blob([bytes], { type });
+}
+
+async function renderLilypondArtifacts() {
+    if (!latestLilypondTranscription) return;
+
+    const button = document.getElementById('renderLilypondBtn') as HTMLButtonElement | null;
+    if (button) {
+        button.disabled = true;
+        button.textContent = 'Rendering...';
+    }
+    setTorusPlaybackStatus('Rendering LilyPond PDF and MIDI...');
+
+    try {
+        const response = await fetch('/api/render-lilypond', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ source: latestLilypondTranscription })
+        });
+        const result = await response.json() as {
+            pdfBase64?: string;
+            midiBase64?: string;
+            error?: string;
+            details?: string;
+        };
+        if (!response.ok || !result.pdfBase64 || !result.midiBase64) {
+            throw new Error(result.details || result.error || `HTTP ${response.status}`);
+        }
+
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        downloadBlob(base64ToBlob(result.pdfBase64, 'application/pdf'), `lars-ring-${timestamp}.pdf`);
+        downloadBlob(base64ToBlob(result.midiBase64, 'audio/midi'), `lars-ring-${timestamp}.midi`);
+        setTorusPlaybackStatus('LilyPond PDF and MIDI generated.');
+    } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown rendering error';
+        setTorusPlaybackStatus(`LilyPond render failed: ${message}`);
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.textContent = 'Render PDF + MIDI';
+        }
+    }
+}
+
+function stopTorusMusic() {
+    if (torusPlaybackTimeout !== null) {
+        window.clearTimeout(torusPlaybackTimeout);
+        torusPlaybackTimeout = null;
+    }
+
+    torusPlaybackIndex = -1;
+    torusSecondaryPlaybackIndex = -1;
+    torusRhythmTick = 0;
+    torusPrimaryPulseCount = 0;
+    torusPlaybackRings = [];
+    if (audioContext) {
+        void audioContext.close();
+        audioContext = null;
+    }
+    setTorusPlaybackStatus('');
+    draw();
+}
+
+function playTorusCell(
+    state: number,
+    cellPosition: number,
+    ringIndex: number,
+    activeCellsInRing: number,
+    octaveOffset: number
+) {
+    if (!audioContext || state <= 0) return;
+
+    const voice = getStateVoice(state, cellPosition);
+    const baseFrequency = getTorusFrequency(cellPosition);
+    const progressedFrequency = getTorusFrequency(cellPosition, ringIndex);
+    voice.frequency *= progressedFrequency / baseFrequency;
+    voice.frequency *= Math.pow(2, octaveOffset);
+    const attack = getMusicNumber('musicAttack', 10, 1, 500) / 1000;
+    const stateSustain = 1 + Math.min(12, Math.max(0, state - 1)) * 0.12;
+    const decay = getMusicNumber('musicDecay', 140, 10, 1000) / 1000 * voice.decayMultiplier * stateSustain;
+    const resonance = getMusicNumber('musicResonance', 0.7, 0.1, 30);
+    const volume = getMusicNumber('musicVolume', 0.7, 0, 1);
+    const gate = getMusicNumber('musicGate', 80, 10, 100) / 100;
+    const spread = getMusicNumber('musicSpread', 0.35, 0, 1);
+    const filterFrequency = Math.min(
+        getMusicNumber('musicFilter', 4000, 100, 20000),
+        audioContext.sampleRate / 2 - 100
+    );
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    const filter = audioContext.createBiquadFilter();
+    const panner = audioContext.createStereoPanner();
+    const now = audioContext.currentTime;
+    const stepMs = getTorusStepMs();
+    const releaseTime = Math.max(attack + decay, stepMs / 1000 * gate);
+    const ringPosition = GRID_WIDTH > 1 ? ringIndex / (GRID_WIDTH - 1) : 0.5;
+
+    oscillator.type = voice.waveform;
+    oscillator.frequency.setValueAtTime(voice.frequency, now);
+    filter.type = ((document.getElementById('musicFilterType') as HTMLSelectElement | null)?.value || 'lowpass') as BiquadFilterType;
+    filter.frequency.setValueAtTime(filterFrequency, now);
+    filter.Q.setValueAtTime(resonance, now);
+    panner.pan.setValueAtTime((ringPosition * 2 - 1) * spread, now);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(
+        Math.max(0.0001, 0.08 * volume * voice.level / Math.sqrt(Math.max(1, activeCellsInRing))),
+        now + attack
+    );
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + releaseTime);
+    oscillator.connect(gain);
+    gain.connect(filter);
+    filter.connect(panner);
+    panner.connect(audioContext.destination);
+    oscillator.start(now);
+    oscillator.stop(now + releaseTime + 0.02);
+}
+
+function playNextTorusRing() {
+    if (!audioContext) {
+        return;
+    }
+
+    const [primaryPulses, secondaryPulses] = getPolyrhythm();
+    const cycleLength = leastCommonMultiple(primaryPulses, secondaryPulses);
+    const primaryInterval = cycleLength / primaryPulses;
+    const secondaryInterval = cycleLength / secondaryPulses;
+
+    if (torusRhythmTick % primaryInterval === 0 && torusPrimaryPulseCount < torusPlaybackRings.length) {
+        torusPlaybackIndex = torusPrimaryPulseCount;
+        const primaryRing = torusPlaybackRings[torusPlaybackIndex];
+        const voices = selectRingVoices(primaryRing);
+        for (const voice of voices) {
+            playTorusCell(
+                voice.cell.state,
+                voice.cell.y,
+                torusPlaybackIndex,
+                voices.length,
+                voice.octaveOffset
+            );
+        }
+        torusPrimaryPulseCount++;
+    }
+
+    const isDistinctSecondaryPulse = primaryPulses !== secondaryPulses ||
+        torusRhythmTick % primaryInterval !== 0;
+    if (isDistinctSecondaryPulse &&
+        torusRhythmTick % secondaryInterval === 0 &&
+        torusSecondaryPlaybackIndex < torusPlaybackRings.length - 1) {
+        torusSecondaryPlaybackIndex++;
+        const secondaryRing = torusPlaybackRings[torusSecondaryPlaybackIndex];
+        const voices = selectRingVoices(secondaryRing);
+        for (const voice of voices) {
+            playTorusCell(
+                voice.cell.state,
+                voice.cell.y,
+                torusSecondaryPlaybackIndex,
+                voices.length,
+                voice.octaveOffset
+            );
+        }
+    }
+
+    const primaryComplete = torusPrimaryPulseCount >= torusPlaybackRings.length;
+    const secondaryComplete = primaryPulses === secondaryPulses ||
+        torusSecondaryPlaybackIndex >= torusPlaybackRings.length - 1;
+    setTorusPlaybackStatus(
+        `Polyrhythm ${primaryPulses}:${secondaryPulses} | ` +
+        `primary ${Math.min(torusPrimaryPulseCount, torusPlaybackRings.length)}/${torusPlaybackRings.length} | ` +
+        `secondary ${Math.min(torusSecondaryPlaybackIndex + 1, torusPlaybackRings.length)}/${torusPlaybackRings.length}`
+    );
+    draw();
+
+    torusRhythmTick++;
+    if (primaryComplete && secondaryComplete) {
+        torusPlaybackIndex = -1;
+        torusSecondaryPlaybackIndex = -1;
+        torusRhythmTick = 0;
+        torusPrimaryPulseCount = 0;
+        torusPlaybackTimeout = null;
+        setTorusPlaybackStatus('');
+        draw();
+        return;
+    }
+
+    torusPlaybackTimeout = window.setTimeout(
+        playNextTorusRing,
+        getTorusStepMs() * primaryPulses / cycleLength
+    );
+}
+
+function startTorusMusic() {
+    if ((document.getElementById('domainType') as HTMLSelectElement).value !== 'toroidal') {
+        setTorusPlaybackStatus('Select Toroidal domain first.');
+        return;
+    }
+
+    stopTorusMusic();
+    audioContext = new AudioContext();
+    torusPlaybackRings = Array.from({ length: GRID_WIDTH }, (_, x) =>
+        Array.from({ length: GRID_HEIGHT }, (_, y) => ({
+            x,
+            y,
+            state: currentConfig.getState([x, y] as unknown as Coordinate<2>)
+        }))
+    );
+    showLilypondTranscription(generateLilypondTranscription(torusPlaybackRings));
+    setTorusPlaybackStatus(`Root: C4 | ${GRID_WIDTH}-TET`);
+    playNextTorusRing();
 }
 
 if (typeof window !== 'undefined') {
@@ -496,10 +1131,30 @@ if (typeof window !== 'undefined') {
         if (scene) scene.add(mesh);
 
         // Connect UI Buttons
+        document.getElementById('togglePlayBtn')?.addEventListener('click', () => {
+            isPaused = !isPaused;
+            updatePlayButton();
+        });
+        document.getElementById('rerollAnnihilationBtn')?.addEventListener('click', () => {
+            const seed = `annihilation-of-joy-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+            (document.getElementById('seedInput') as HTMLInputElement).value = seed;
+            (document.getElementById('introSeedInput') as HTMLInputElement).value = seed;
+            initializeSimulation();
+            startTorusMusic();
+        });
+        document.getElementById('toggleMusicBtn')?.addEventListener('click', () => {
+            document.getElementById('music-controls')?.classList.toggle('hidden');
+        });
         document.getElementById('resetBtn')?.addEventListener('click', () => {
+            stopTorusMusic();
+            isPaused = false;
+            updatePlayButton();
             initializeSimulation();
         });
         document.getElementById('exportStateBtn')?.addEventListener('click', exportStateToSeed);
+        document.getElementById('playTorusBtn')?.addEventListener('click', startTorusMusic);
+        document.getElementById('downloadLilypondBtn')?.addEventListener('click', downloadLilypondTranscription);
+        document.getElementById('renderLilypondBtn')?.addEventListener('click', renderLilypondArtifacts);
 
         document.getElementById('randomRuleBtn')?.addEventListener('click', () => {
             const topologyType = (document.getElementById('topologyType') as HTMLSelectElement).value;
@@ -555,6 +1210,7 @@ if (typeof window !== 'undefined') {
             switch (e.key.toLowerCase()) {
                 case ' ':
                     isPaused = !isPaused;
+                    updatePlayButton();
                     e.preventDefault();
                     break;
                 case 'r':
@@ -577,6 +1233,8 @@ if (typeof window !== 'undefined') {
             hasStarted = true;
             document.getElementById('intro-layer')?.classList.add('hidden');
 
+            isPaused = false;
+            updatePlayButton();
             initializeSimulation();
 
             intervalId = window.setInterval(() => {
@@ -617,6 +1275,96 @@ if (typeof window !== 'undefined') {
             (document.getElementById('introSeedInput') as HTMLInputElement).value = oscillatorBase64;
             (document.getElementById('seedInput') as HTMLInputElement).value = oscillatorBase64;
             startSimulation();
+        });
+
+        document.getElementById('presetAnnihilationBtn')?.addEventListener('click', () => {
+            const setValue = (id: string, value: string) => {
+                const element = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
+                if (element) element.value = value;
+            };
+
+            setValue('seedInput', 'annihilation-of-joy');
+            setValue('configType', 'dense');
+            setValue('topologyType', 'square');
+            setValue('neighborhoodType', 'moore');
+            setValue('domainType', 'toroidal');
+            setValue('gridWidth', '24');
+            setValue('gridHeight', '12');
+            setValue('survivalRules', '23');
+            setValue('birthRules', '3');
+            setValue('netherRules', '2');
+            setValue('frequencyDomain', '0');
+            setValue('colorStrategy', 'monochrome');
+            (document.getElementById('useNetherstate') as HTMLInputElement).checked = true;
+
+            setValue('musicScale', 'minor');
+            setValue('musicTuning', 'just');
+            setValue('musicRoot', '110');
+            setValue('musicAttack', '40');
+            setValue('musicResonance', '4');
+            setValue('musicDecay', '600');
+            setValue('musicFilter', '900');
+            setValue('musicFilterType', 'bandpass');
+            setValue('musicWaveform', 'sawtooth');
+            setValue('musicTempo', '54');
+            setValue('musicRhythm', '5:4');
+            setValue('musicVolume', '0.65');
+            setValue('musicGate', '95');
+            setValue('musicSpread', '0.8');
+            setValue('musicPolyphony', 'full');
+            setValue('musicMaxVoices', '12');
+            setValue('musicStateMode', 'harmonic');
+
+            const netherGroup = document.getElementById('netherRulesGroup');
+            if (netherGroup) netherGroup.style.display = 'flex';
+            (document.getElementById('introSeedInput') as HTMLInputElement).value = 'annihilation-of-joy';
+            startSimulation();
+            startTorusMusic();
+        });
+
+        document.getElementById('presetScenicBtn')?.addEventListener('click', () => {
+            const setValue = (id: string, value: string) => {
+                const element = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
+                if (element) element.value = value;
+            };
+
+            setValue('seedInput', 'scenic-world-study');
+            setValue('configType', 'dense');
+            setValue('topologyType', 'square');
+            setValue('neighborhoodType', 'moore');
+            setValue('domainType', 'toroidal');
+            setValue('gridWidth', '24');
+            setValue('gridHeight', '12');
+            setValue('survivalRules', '23');
+            setValue('birthRules', '3');
+            setValue('frequencyDomain', '0');
+            setValue('colorStrategy', 'cyclical');
+            (document.getElementById('useNetherstate') as HTMLInputElement).checked = false;
+
+            setValue('musicScale', 'minor');
+            setValue('musicProgression', 'bittersweet');
+            setValue('musicTuning', 'equal');
+            setValue('musicRoot', '146.83');
+            setValue('musicAttack', '55');
+            setValue('musicResonance', '1.2');
+            setValue('musicDecay', '420');
+            setValue('musicFilter', '2400');
+            setValue('musicFilterType', 'lowpass');
+            setValue('musicWaveform', 'triangle');
+            setValue('musicTempo', '84');
+            setValue('musicRhythm', '3:2');
+            setValue('musicVolume', '0.58');
+            setValue('musicGate', '88');
+            setValue('musicSpread', '0.55');
+            setValue('musicPolyphony', 'four');
+            setValue('musicMaxVoices', '6');
+            setValue('musicStateMode', 'harmonic');
+
+            const netherGroup = document.getElementById('netherRulesGroup');
+            if (netherGroup) netherGroup.style.display = 'none';
+            (document.getElementById('introSeedInput') as HTMLInputElement).value = 'scenic-world-study';
+            startSimulation();
+            startTorusMusic();
         });
     };
 }

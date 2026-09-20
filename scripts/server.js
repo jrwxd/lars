@@ -1,5 +1,7 @@
 const http = require('http');
+const childProcess = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 // We're using 8081 because 8080 was already occupied
@@ -15,6 +17,99 @@ const MIME_TYPES = {
 // Start from the directory the script runs in (scripts/) and go back out a level to look inside public/
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
+function sendJson(res, statusCode, payload) {
+    res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(payload));
+}
+
+function readRequestBody(req, maximumBytes) {
+    return new Promise((resolve, reject) => {
+        let body = '';
+        let byteLength = 0;
+
+        req.setEncoding('utf8');
+        req.on('data', chunk => {
+            byteLength += Buffer.byteLength(chunk);
+            if (byteLength > maximumBytes) {
+                reject(new Error('Request body is too large.'));
+                req.destroy();
+                return;
+            }
+            body += chunk;
+        });
+        req.on('end', () => resolve(body));
+        req.on('error', reject);
+    });
+}
+
+async function renderLilypond(req, res) {
+    const maximumSourceBytes = 2 * 1024 * 1024;
+    let temporaryDirectory;
+
+    try {
+        const body = JSON.parse(await readRequestBody(req, maximumSourceBytes));
+        if (typeof body.source !== 'string' || body.source.trim() === '') {
+            sendJson(res, 400, { error: 'A non-empty LilyPond source string is required.' });
+            return;
+        }
+
+        temporaryDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lars-lilypond-'));
+        const sourcePath = path.join(temporaryDirectory, 'ring.ly');
+        const outputBase = path.join(temporaryDirectory, 'ring');
+        await fs.promises.writeFile(sourcePath, body.source, 'utf8');
+
+        const lilypond = childProcess.spawn(
+            'lilypond',
+            ['--pdf', '--output', outputBase, sourcePath],
+            { cwd: temporaryDirectory }
+        );
+        let stderr = '';
+        lilypond.stderr.setEncoding('utf8');
+        lilypond.stderr.on('data', chunk => {
+            stderr += chunk;
+        });
+
+        const exitCode = await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                lilypond.kill();
+                reject(new Error('LilyPond timed out after 30 seconds.'));
+            }, 30000);
+            lilypond.on('error', error => {
+                clearTimeout(timeout);
+                reject(error);
+            });
+            lilypond.on('close', code => {
+                clearTimeout(timeout);
+                resolve(code);
+            });
+        });
+
+        if (exitCode !== 0) {
+            sendJson(res, 422, {
+                error: 'LilyPond could not compile the transcription.',
+                details: stderr.slice(-4000)
+            });
+            return;
+        }
+
+        const [pdf, midi] = await Promise.all([
+            fs.promises.readFile(`${outputBase}.pdf`),
+            fs.promises.readFile(`${outputBase}.midi`)
+        ]);
+        sendJson(res, 200, {
+            pdfBase64: pdf.toString('base64'),
+            midiBase64: midi.toString('base64')
+        });
+    } catch (error) {
+        console.error(`  -> LilyPond render failed: ${error.message}`);
+        sendJson(res, 500, { error: error.message || 'LilyPond render failed.' });
+    } finally {
+        if (temporaryDirectory) {
+            await fs.promises.rm(temporaryDirectory, { recursive: true, force: true });
+        }
+    }
+}
+
 const server = http.createServer((req, res) => {
     console.log(`[REQ] ${req.method} ${req.url}`);
 
@@ -22,6 +117,15 @@ const server = http.createServer((req, res) => {
         // Parse URL to ignore query strings
         const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
         let pathname = decodeURIComponent(parsedUrl.pathname);
+
+        if (pathname === '/api/render-lilypond') {
+            if (req.method !== 'POST') {
+                sendJson(res, 405, { error: 'Method Not Allowed' });
+                return;
+            }
+            void renderLilypond(req, res);
+            return;
+        }
 
         // Normalize path to prevent directory traversal
         // path.normalize() resolves '..' and '.' segments
